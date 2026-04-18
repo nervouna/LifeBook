@@ -1,0 +1,147 @@
+"""Command-line entry point."""
+from __future__ import annotations
+
+import logging
+import sys
+from pathlib import Path
+
+import click
+
+from .config import load_config
+
+
+@click.group()
+@click.option("--config", "config_path", type=click.Path(), default=None, help="Path to config.yaml")
+@click.pass_context
+def main(ctx: click.Context, config_path: str | None) -> None:
+    """LifeBook command-line interface."""
+    cfg = load_config(config_path)
+    logging.basicConfig(
+        level=getattr(logging, cfg.logging.level.upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    ctx.ensure_object(dict)
+    ctx.obj["config"] = cfg
+
+
+@main.command()
+@click.option("--file", "file_path", type=click.Path(exists=True), default=None,
+              help="Process a single file instead of scanning inbox.")
+@click.pass_context
+def process(ctx: click.Context, file_path: str | None) -> None:
+    """Process inbox: classify, tag, link, and create topic notes."""
+    from .executor import Executor
+    cfg = ctx.obj["config"]
+    executor = Executor(cfg)
+
+    if file_path:
+        result = executor.process_file(Path(file_path))
+        _print_result(result)
+        sys.exit(0 if result.ok else 1)
+
+    results = executor.process_inbox()
+    ok = sum(1 for r in results if r.ok)
+    skipped = sum(1 for r in results if r.skipped_reason)
+    failed = sum(1 for r in results if not r.ok and not r.skipped_reason)
+    click.echo(f"\nSummary: {len(results)} total | {ok} ok | {skipped} skipped | {failed} failed")
+    for r in results:
+        _print_result(r)
+
+
+def _print_result(r) -> None:
+    name = r.source_path.name
+    if r.ok and r.topic_path:
+        click.echo(f"  ✓ {name}  →  {r.topic_path.name}")
+    elif r.skipped_reason:
+        click.echo(f"  ⊘ {name}  [{r.skipped_reason}]")
+    else:
+        click.echo(f"  ✗ {name}  ERROR: {r.error}")
+
+
+@main.command()
+@click.argument("url_or_text")
+@click.option("--type", "source_type",
+              type=click.Choice(["webclip", "chat_link", "chat_note", "manual"]),
+              default="manual")
+@click.option("--title", default=None)
+@click.pass_context
+def ingest(ctx: click.Context, url_or_text: str, source_type: str, title: str | None) -> None:
+    """Add a URL or text snippet to the inbox (for quick manual testing)."""
+    from .ingest import ingest_url, ingest_text
+    cfg = ctx.obj["config"]
+    is_url = url_or_text.startswith("http://") or url_or_text.startswith("https://")
+    if is_url:
+        p = ingest_url(cfg.knowledge, url_or_text, source_type=source_type, title_hint=title)  # type: ignore[arg-type]
+    else:
+        p = ingest_text(cfg.knowledge, url_or_text, source_type=source_type, title_hint=title)  # type: ignore[arg-type]
+    click.echo(f"Ingested: {p}")
+
+
+@main.command()
+@click.pass_context
+def digest(ctx: click.Context) -> None:
+    """Generate and push today's digest to Feishu."""
+    click.echo("[stub] digest — Day 5 implementation pending")
+
+
+@main.command()
+@click.pass_context
+def serve(ctx: click.Context) -> None:
+    """Start Feishu bot long-connection client."""
+    from .feishu import FeishuBot
+    cfg = ctx.obj["config"]
+    bot = FeishuBot(cfg)
+    bot.start()  # blocks
+
+
+@main.command()
+@click.option("--timeout", "timeout_minutes", type=int, default=10,
+              help="Rollback files stuck in processing for more than N minutes (default: 10).")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Only show what would be rolled back, don't modify files.")
+@click.pass_context
+def recover(ctx: click.Context, timeout_minutes: int, dry_run: bool) -> None:
+    """Roll back files stuck in status:processing back to inbox."""
+    from .executor import Executor
+    cfg = ctx.obj["config"]
+    executor = Executor(cfg)
+    stale = executor.recover_stale(timeout_minutes=timeout_minutes, dry_run=dry_run)
+    if not stale:
+        click.echo(f"No files stuck in processing longer than {timeout_minutes} min.")
+        return
+    verb = "Would recover" if dry_run else "Recovered"
+    click.echo(f"{verb} {len(stale)} file(s):")
+    for p, info in stale:
+        click.echo(f"  - {p.name}  [{info}]")
+
+
+@main.command()
+@click.pass_context
+def doctor(ctx: click.Context) -> None:
+    """Check configuration and environment."""
+    cfg = ctx.obj["config"]
+    checks: list[tuple[str, bool, str]] = []
+
+    for name, path in [
+        ("Knowledge root", cfg.knowledge.root),
+        ("Sources dir", cfg.knowledge.sources_path),
+        ("Topics dir", cfg.knowledge.topics_path),
+        ("Trajectories dir", cfg.knowledge.trajectories_path),
+        ("State dir", cfg.knowledge.state_path),
+    ]:
+        checks.append((name, path.exists(), str(path)))
+
+    checks.append(("LLM API key", bool(cfg.llm.api_key), cfg.llm.base_url))
+    checks.append(("LLM model", True, f"{cfg.llm.model} (digest: {cfg.llm.digest_model})"))
+    checks.append(("Tavily API key", bool(cfg.tavily.api_key), f"depth={cfg.tavily.extract_depth}"))
+    checks.append(("Feishu app_id", bool(cfg.feishu.app_id), cfg.feishu.app_id or "(empty)"))
+    checks.append(("Feishu digest chat_id", bool(cfg.feishu.digest_chat_id),
+                   cfg.feishu.digest_chat_id or "(empty)"))
+
+    for name, ok, detail in checks:
+        mark = "✓" if ok else "✗"
+        click.echo(f"  {mark}  {name:<28} {detail}")
+
+
+if __name__ == "__main__":
+    main()
