@@ -259,7 +259,7 @@ class TestStateMachine:
         llm.text_call.return_value = CONTENT_TEXT
         w.handle_message("选方案1")
         # discuss
-        llm.text_call.return_value = "## 修改后的内容\n\n好的"
+        llm.agentic_call.return_value = "好的，我已修改了引言部分。"
         w.handle_message("修改一下引言")
         assert w.stage == STAGE_REVIEW
 

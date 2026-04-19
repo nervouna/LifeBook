@@ -129,8 +129,11 @@ DISCUSS_SYSTEM = """\
 1. 不迎合。如果用户的质疑缺乏依据，你应该礼貌但明确地指出
 2. 如果你认为用户是对的，直接承认并说明如何修改
 3. 引用存量笔记和搜索结果作为论据，不要凭空论证
-4. 讨论结束后，输出修改后的完整正文（不是 diff，是全文）
-5. 同时更新自检清单
+4. 你的文字回复只包含讨论内容：回应用户的问题、论证观点、解释推理
+5. 不要在文字回复中包含完整文章或自检清单
+6. 当需要更新文章时，调用 update_draft 工具提交修改后的完整正文
+7. 如果讨论尚未达成修改共识，可以只回复讨论文字，不调用工具
+8. 更新时只调用一次 update_draft，提交完整文章
 
 用户可能：
 - 对某个段落提出具体质疑
@@ -138,7 +141,7 @@ DISCUSS_SYSTEM = """\
 - 对自检清单中的项目做出回应
 - 提出新的论点或角度
 
-你应该就事论事地回应，然后给出修改后的全文。
+你应该就事论事地回应，需要修改时通过 update_draft 工具提交。
 """
 
 BACKFILL_SYSTEM = """\
@@ -187,6 +190,25 @@ BACKFILL_TOOL_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["should_backfill", "items"],
+}
+
+UPDATE_DRAFT_TOOL = {
+    "name": "update_draft",
+    "description": "更新文章正文和自检清单。仅在讨论中达成修改共识后调用，提交修改后的完整正文。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "content": {
+                "type": "string",
+                "description": "修改后的完整正文（Markdown 格式）"
+            },
+            "checklist": {
+                "type": "string",
+                "description": "更新后的自检清单（Markdown 列表格式，可为空字符串表示无需自检）"
+            }
+        },
+        "required": ["content"]
+    }
 }
 
 
@@ -466,12 +488,38 @@ class Writer:
             user_msg += f"\n\n[系统补充的存量笔记参考：\n{topic_context}]"
         messages.append({"role": "user", "content": user_msg})
 
+        # Closure to handle update_draft tool calls
+        draft_updated = False
+
+        def _handle_update_draft(inp: dict) -> str:
+            nonlocal draft_updated
+            content_body = inp["content"]
+            checklist = inp.get("checklist", "")
+            # Re-read draft to get latest state
+            p = self._load_draft()
+            p.content = (
+                self._extract_section(p.content, "核心概念", keep_header=True)
+                + "\n\n"
+                + self._extract_section(p.content, "框架", keep_header=True)
+                + "\n\n## 正文\n\n"
+                + content_body.strip()
+                + "\n"
+            )
+            if checklist:
+                p.content += f"\n## 自检清单\n\n{checklist.strip()}\n"
+            p["stage"] = STAGE_REVIEW
+            p["updated"] = now_iso()
+            self._save_draft(p)
+            draft_updated = True
+            return "草稿已更新"
+
         response = self.llm.agentic_call(
             system=DISCUSS_SYSTEM,
             messages=messages,
-            tools=[WEB_SEARCH_TOOL],
+            tools=[WEB_SEARCH_TOOL, UPDATE_DRAFT_TOOL],
             tool_executor={
                 "web_search": lambda inp: web_search(inp["query"], self.cfg),
+                "update_draft": _handle_update_draft,
             },
         )
 
@@ -479,25 +527,12 @@ class Writer:
         self._history.append({"role": "user", "content": feedback})
         self._history.append({"role": "assistant", "content": response})
 
-        # Try to extract updated content from response and update draft
-        draft_updated = "## " in response or "# " in response
-        logger.debug("draft updated from response: %s", draft_updated)
-        if draft_updated:
-            content_body, checklist = self._split_checklist(response)
-            post.content = (
-                self._extract_section(post.content, "核心概念", keep_header=True)
-                + "\n\n"
-                + self._extract_section(post.content, "框架", keep_header=True)
-                + "\n\n## 正文\n\n"
-                + content_body.strip()
-                + "\n"
-            )
-            if checklist:
-                post.content += f"\n## 自检清单\n\n{checklist.strip()}\n"
-
-        post["stage"] = STAGE_REVIEW
-        post["updated"] = now_iso()
-        self._save_draft(post)
+        # If no tool call updated the draft, still mark as review stage
+        if not draft_updated:
+            post = self._load_draft()
+            post["stage"] = STAGE_REVIEW
+            post["updated"] = now_iso()
+            self._save_draft(post)
 
         return response
 

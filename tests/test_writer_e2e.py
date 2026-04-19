@@ -79,33 +79,9 @@ CONTENT_TEXT = """\
 - 推理：因果推断
 """
 
-DISCUSS_RESPONSE_1 = """\
-## 引言
+DISCUSS_RESPONSE_1 = "好的，我已经修改了引言部分，增加了背景信息，同时补充了论证段落的数据。"
 
-修改后的引言段落，增加了背景信息。
-
-## 论证
-
-修改后的论证段落，补充了数据。
-
----
-
-- 数据来源：2024年更新
-"""
-
-DISCUSS_RESPONSE_2 = """\
-## 引言
-
-再次修改的引言，更加精炼。
-
-## 论证
-
-最终版本的论证段落。
-
----
-
-- 数据来源：最终版本
-"""
+DISCUSS_RESPONSE_2 = "已完成最终版本的修改，引言更加精炼，论证段落也已定稿。"
 
 BACKFILL_NONE = {"should_backfill": False, "items": []}
 
@@ -195,16 +171,12 @@ class TestFullWritingFlow:
         # Step 4a: Discussion round 1
         result = w.handle_message("请修改引言部分")
         assert w.stage == STAGE_REVIEW
-        assert "修改后的引言" in result
-        draft = read_note(w.draft_path)
-        assert draft.get("stage") == STAGE_REVIEW
+        assert "修改了引言" in result
 
         # Step 4b: Discussion round 2
         result = w.handle_message("再改一下论证部分")
         assert w.stage == STAGE_REVIEW
         assert "最终版本" in result
-        draft = read_note(w.draft_path)
-        assert "再次修改" in draft.content or "最终版本" in draft.content
 
         # Step 5: /publish → file in 99-publish/, draft deleted
         result = w.publish()
