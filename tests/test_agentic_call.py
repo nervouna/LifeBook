@@ -1,6 +1,7 @@
 """Tests for agentic_call, web_search, and _discuss integration."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -14,22 +15,30 @@ from lifebook.writer import UPDATE_DRAFT_TOOL
 
 # ---- helpers ----
 
-def _text_block(text: str):
-    return SimpleNamespace(type="text", text=text)
+def _tool_call(name: str, arguments: dict, tc_id: str = "tc_1"):
+    return SimpleNamespace(
+        id=tc_id,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=json.dumps(arguments)),
+    )
 
 
-def _tool_use_block(name: str, input_dict: dict, tool_id: str = "tool_1"):
-    return SimpleNamespace(type="tool_use", name=name, input=input_dict, id=tool_id)
+def _message(content: str = "", tool_calls=None):
+    return SimpleNamespace(content=content, tool_calls=tool_calls)
 
 
-def _response(blocks, stop_reason="end_turn"):
-    return SimpleNamespace(content=blocks, stop_reason=stop_reason)
+def _choice(message, finish_reason="stop"):
+    return SimpleNamespace(message=message, finish_reason=finish_reason)
+
+
+def _response(content: str = "", tool_calls=None, finish_reason="stop"):
+    return SimpleNamespace(choices=[_choice(_message(content, tool_calls), finish_reason)])
 
 
 def _make_llm():
-    """Create LLMClient with mocked Anthropic client."""
+    """Create LLMClient with mocked OpenAI client."""
     cfg = LLMConfig(api_key="fake", base_url="https://fake.api")
-    with patch("lifebook.llm.Anthropic"):
+    with patch("lifebook.llm.OpenAI"):
         client = LLMClient(cfg)
     return client
 
@@ -53,21 +62,21 @@ class TestAgenticCall:
     def test_no_tool_use(self):
         """LLM returns text immediately without tool calls."""
         llm = _make_llm()
-        llm.client.messages.create.return_value = _response([_text_block("Hello world")])
+        llm.client.chat.completions.create.return_value = _response("Hello world")
 
         result = llm.agentic_call(
             system="sys", messages=[{"role": "user", "content": "hi"}],
             tools=[WEB_SEARCH_TOOL], tool_executor={},
         )
         assert result == "Hello world"
-        assert llm.client.messages.create.call_count == 1
+        assert llm.client.chat.completions.create.call_count == 1
 
     def test_one_round_tool_use(self):
         """LLM calls tool once, gets result, returns text."""
         llm = _make_llm()
-        llm.client.messages.create.side_effect = [
-            _response([_tool_use_block("web_search", {"query": "test"}, "t1")], stop_reason="tool_use"),
-            _response([_text_block("Found info")]),
+        llm.client.chat.completions.create.side_effect = [
+            _response(tool_calls=[_tool_call("web_search", {"query": "test"}, "t1")], finish_reason="tool_calls"),
+            _response("Found info"),
         ]
         executor = {"web_search": MagicMock(return_value="search result")}
 
@@ -77,17 +86,17 @@ class TestAgenticCall:
         )
         assert result == "Found info"
         executor["web_search"].assert_called_once_with({"query": "test"})
-        assert llm.client.messages.create.call_count == 2
+        assert llm.client.chat.completions.create.call_count == 2
 
     def test_multiple_tool_blocks(self):
-        """LLM emits multiple tool_use blocks in one response."""
+        """LLM emits multiple tool calls in one response."""
         llm = _make_llm()
-        llm.client.messages.create.side_effect = [
-            _response([
-                _tool_use_block("web_search", {"query": "q1"}, "t1"),
-                _tool_use_block("web_search", {"query": "q2"}, "t2"),
-            ], stop_reason="tool_use"),
-            _response([_text_block("Combined result")]),
+        llm.client.chat.completions.create.side_effect = [
+            _response(tool_calls=[
+                _tool_call("web_search", {"query": "q1"}, "t1"),
+                _tool_call("web_search", {"query": "q2"}, "t2"),
+            ], finish_reason="tool_calls"),
+            _response("Combined result"),
         ]
         executor = {"web_search": MagicMock(return_value="res")}
 
@@ -101,11 +110,10 @@ class TestAgenticCall:
     def test_max_rounds_exceeded(self):
         """After max_rounds of tool calls, forces text output."""
         llm = _make_llm()
-        # 2 rounds of tool use, then final text call
-        llm.client.messages.create.side_effect = [
-            _response([_tool_use_block("web_search", {"query": "q"}, "t1")], stop_reason="tool_use"),
-            _response([_tool_use_block("web_search", {"query": "q"}, "t2")], stop_reason="tool_use"),
-            _response([_text_block("Final answer")]),  # forced call without tools
+        llm.client.chat.completions.create.side_effect = [
+            _response(tool_calls=[_tool_call("web_search", {"query": "q"}, "t1")], finish_reason="tool_calls"),
+            _response(tool_calls=[_tool_call("web_search", {"query": "q"}, "t2")], finish_reason="tool_calls"),
+            _response("Final answer"),
         ]
         executor = {"web_search": MagicMock(return_value="res")}
 
@@ -115,7 +123,7 @@ class TestAgenticCall:
         )
         assert result == "Final answer"
         # Last call should not have tools
-        last_call_kwargs = llm.client.messages.create.call_args
+        last_call_kwargs = llm.client.chat.completions.create.call_args
         assert "tools" not in last_call_kwargs.kwargs
 
 
@@ -153,7 +161,7 @@ class TestDiscussIntegration:
         """_discuss should call agentic_call instead of text_call."""
         cfg = _make_cfg(tmp_path)
 
-        with patch("lifebook.llm.Anthropic"):
+        with patch("lifebook.llm.OpenAI"):
             llm = LLMClient(cfg.llm)
 
         llm.agentic_call = MagicMock(return_value="## Updated content\n\nNew text")
@@ -182,7 +190,7 @@ class TestDiscussIntegration:
         """_discuss should pass both web_search and update_draft tools."""
         cfg = _make_cfg(tmp_path)
 
-        with patch("lifebook.llm.Anthropic"):
+        with patch("lifebook.llm.OpenAI"):
             llm = LLMClient(cfg.llm)
 
         llm.agentic_call = MagicMock(return_value="讨论内容")
@@ -210,7 +218,7 @@ class TestDiscussIntegration:
         """When LLM calls update_draft, draft file gets updated and history has only discussion text."""
         cfg = _make_cfg(tmp_path)
 
-        with patch("lifebook.llm.Anthropic"):
+        with patch("lifebook.llm.OpenAI"):
             llm = LLMClient(cfg.llm)
 
         from lifebook.writer import Writer, STAGE_CONTENT, STAGE_REVIEW
