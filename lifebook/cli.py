@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -113,6 +114,87 @@ def recover(ctx: click.Context, timeout_minutes: int, dry_run: bool) -> None:
     click.echo(f"{verb} {len(stale)} file(s):")
     for p, info in stale:
         click.echo(f"  - {p.name}  [{info}]")
+
+
+@main.command()
+@click.option("--full", is_flag=True, help="Perform full rebuild instead of incremental update.")
+@click.option("--interval", type=int, default=None, help="Set polling interval in seconds (for background mode).")
+@click.pass_context
+def index(ctx: click.Context, full: bool, interval: int | None) -> None:
+    """Manage vector index: update, rebuild, or start background service."""
+    from .indexer import Indexer
+    cfg = ctx.obj["config"]
+    
+    if interval is not None:
+        # Start background service with custom interval
+        indexer = Indexer(cfg, interval=interval)
+        click.echo(f"Starting indexer background service with {interval}s polling interval...")
+        indexer.start()
+        click.echo("Indexer started. Press Ctrl+C to stop.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            click.echo("\nStopping indexer...")
+            indexer.stop()
+        return
+    
+    indexer = Indexer(cfg)
+    
+    if full:
+        click.echo("Performing full rebuild...")
+        stats = indexer.full_rebuild()
+    else:
+        click.echo("Performing incremental update...")
+        stats = indexer.incremental_update()
+    
+    upserted = stats.get("upserted", 0)
+    deleted = stats.get("deleted", 0)
+    unchanged = stats.get("unchanged", 0)
+    errors = stats.get("errors", [])
+    
+    click.echo(f"\nIndex update complete:")
+    click.echo(f"  Upserted: {upserted}")
+    click.echo(f"  Deleted:  {deleted}")
+    click.echo(f"  Unchanged: {unchanged}")
+    
+    if errors:
+        click.echo(f"  Errors: {len(errors)}")
+        for err in errors[:5]:
+            click.echo(f"    - {err}")
+        if len(errors) > 5:
+            click.echo(f"    ... and {len(errors) - 5} more")
+
+
+@main.command()
+@click.argument("query")
+@click.option("--limit", type=int, default=10, help="Maximum number of results (default: 10).")
+@click.pass_context
+def search(ctx: click.Context, query: str, limit: int) -> None:
+    """Search knowledge base using vector similarity."""
+    from .vector import VectorIndex
+    cfg = ctx.obj["config"]
+
+    persist_dir = cfg.knowledge.state_path / "vector_store"
+    vector = VectorIndex(persist_dir)
+    results = vector.search(query, n_results=limit)
+
+    if not results:
+        click.echo(f"No results found for '{query}'")
+        return
+
+    click.echo(f"Found {len(results)} results for '{query}':\n")
+
+    for i, r in enumerate(results, 1):
+        title = r.metadata.get("title", r.doc_id)
+        similarity = max(0, 1.0 - r.distance) * 100
+        preview = r.text[:80] + "..." if len(r.text) > 80 else r.text
+
+        click.echo(f"{i}. {title}")
+        click.echo(f"   Similarity: {similarity:.1f}%")
+        click.echo(f"   Path: {r.doc_id}")
+        click.echo(f"   Preview: {preview}")
+        click.echo()
 
 
 @main.command()
