@@ -353,6 +353,9 @@ class Writer:
             checklist = inp.get("checklist", "")
             # Re-read draft to get latest state
             p = self._load_draft()
+            # Splice [UNCHANGED] sections from current draft
+            current_body = self._extract_section(p.content, "正文")
+            content_body = self._splice_unchanged(current_body, content_body)
             p.content = (
                 self._extract_section(p.content, "核心概念", keep_header=True)
                 + "\n\n"
@@ -565,3 +568,49 @@ class Writer:
             idx = text.index("## 自检清单")
             return text[:idx].rstrip(), text[idx + len("## 自检清单"):].strip()
         return text, ""
+
+    @staticmethod
+    def _splice_unchanged(original: str, updated: str) -> str:
+        """Replace [UNCHANGED] sections in updated with corresponding sections from original.
+
+        When a ## section in updated contains only "[UNCHANGED]", the entire
+        section content from original is substituted in.
+        """
+        import re
+        if "[UNCHANGED]" not in updated:
+            return updated
+
+        # Parse both into heading→content maps
+        def parse_sections(text: str) -> dict[str, str]:
+            sections: dict[str, str] = {}
+            current_key: str | None = None
+            current_lines: list[str] = []
+            in_code = False
+            for line in text.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("```"):
+                    in_code = not in_code
+                if not in_code and re.match(r"^## .+", stripped):
+                    if current_key is not None:
+                        sections[current_key] = "\n".join(current_lines)
+                    current_key = stripped
+                    current_lines = [line]
+                elif current_key is not None:
+                    current_lines.append(line)
+            if current_key is not None:
+                sections[current_key] = "\n".join(current_lines)
+            return sections
+
+        orig_sections = parse_sections(original)
+        upd_sections = parse_sections(updated)
+
+        # Replace [UNCHANGED] sections
+        for heading, content in upd_sections.items():
+            if "[UNCHANGED]" in content and heading in orig_sections:
+                upd_sections[heading] = orig_sections[heading]
+
+        # Reassemble: keep order from updated
+        result_parts: list[str] = []
+        for heading in upd_sections:
+            result_parts.append(upd_sections[heading])
+        return "\n".join(result_parts)

@@ -555,3 +555,25 @@ class TestDraftVersioning:
         w, llm, cfg = make_writer(tmp_path)
         result = w.restore_draft()
         assert "没有可恢复" in result
+
+
+# ── 9. Partial draft update ───────────────────────────────────────
+
+
+class TestPartialDraftUpdate:
+    def test_splice_unchanged_sections(self):
+        """_splice_unchanged should replace [UNCHANGED] sections with originals."""
+        original = "## 引言\n\n旧引言。\n\n## 论证\n\n旧论证。\n\n## 结论\n\n旧结论。\n"
+        updated = "## 引言\n\n新引言。\n\n## 论证\n\n[UNCHANGED]\n\n## 结论\n\n新结论。\n"
+        result = Writer._splice_unchanged(original, updated)
+        assert "新引言" in result
+        assert "旧论证" in result
+        assert "新结论" in result
+        assert "[UNCHANGED]" not in result
+
+    def test_splice_no_unchanged_returns_updated(self):
+        """When no [UNCHANGED] markers, return updated as-is."""
+        original = "旧内容"
+        updated = "全新内容"
+        result = Writer._splice_unchanged(original, updated)
+        assert result == updated
