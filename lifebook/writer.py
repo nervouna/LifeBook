@@ -39,6 +39,8 @@ STAGE_FRAMEWORK = "framework"
 STAGE_CONTENT = "content"
 STAGE_REVIEW = "review"
 
+MAX_HISTORY = 20  # max discussion turns (user+assistant pairs) kept in memory
+
 
 class Writer:
     """Interactive writing state machine with draft persistence."""
@@ -365,6 +367,12 @@ class Writer:
         # Track history
         self._history.append({"role": "user", "content": feedback})
         self._history.append({"role": "assistant", "content": response})
+
+        # Cap history to prevent unbounded growth
+        if len(self._history) > MAX_HISTORY:
+            dropped = len(self._history) - MAX_HISTORY
+            self._history = self._history[-MAX_HISTORY:]
+            logger.info("history trimmed, dropped %d oldest entries", dropped)
 
         # If no tool call updated the draft, still mark as review stage
         if not draft_updated:

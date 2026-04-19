@@ -390,3 +390,42 @@ class TestThreadSafety:
         w, llm, cfg = make_writer(tmp_path)
         assert hasattr(w, "_lock"), "Writer must have a _lock attribute"
         assert isinstance(w._lock, type(threading.Lock())), "Writer._lock must be a threading.Lock"
+
+
+# ── 7. History cap ────────────────────────────────────────────────
+
+
+class TestHistoryCap:
+    def _setup_content_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        llm.text_call.return_value = CONTENT_TEXT
+        w.handle_message("选方案1")
+        return w, llm, cfg
+
+    def test_history_trimmed_after_max(self, tmp_path):
+        """After max_history discussion rounds, older turns are dropped."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+
+        # Simulate 15 discussion rounds
+        for i in range(15):
+            llm.agentic_call.return_value = f"回复第{i}轮"
+            w.handle_message(f"第{i}轮反馈")
+
+        # History should be capped at 10 (2 entries per round: user + assistant)
+        assert len(w._history) <= 20  # max_history rounds × 2 entries
+
+    def test_oldest_turns_dropped(self, tmp_path):
+        """When history is trimmed, the oldest turns are removed first."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+
+        for i in range(12):
+            llm.agentic_call.return_value = f"回复{i}"
+            w.handle_message(f"反馈{i}")
+
+        # First entry should not be from round 0
+        first_content = w._history[0]["content"]
+        assert "反馈0" not in first_content
