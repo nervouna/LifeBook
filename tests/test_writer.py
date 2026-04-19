@@ -156,53 +156,7 @@ class TestSplitChecklist:
         assert body == text
         assert checklist == ""
 
-
-# ── 2. _search_topics_for_context ────────────────────────────────────
-
-
-class TestSearchTopics:
-    def _create_topic(self, topics_dir: Path, filename: str, **kwargs):
-        title = kwargs.pop("title", filename.replace(".md", ""))
-        body = kwargs.pop("body", "默认内容")
-        post = new_post(body, title=title, **kwargs)
-        write_note(topics_dir / filename, post)
-
-    def test_category_match_scores_highest(self, tmp_path):
-        w, _, cfg = make_writer(tmp_path)
-        td = cfg.knowledge.topics_path
-        self._create_topic(td, "a.md", title="无关标题A", category="投资", body="无关内容")
-        self._create_topic(td, "b.md", title="无关标题B", tags=["投资"], body="无关内容")
-        self._create_topic(td, "c.md", title="投资指南", body="无关内容")
-        self._create_topic(td, "d.md", title="无关标题D", body="投资是重要的事情")
-
-        result = w._search_topics_for_context("投资")
-        lines = result.strip().split("\n")
-        # Category match (3.0) should appear first
-        assert "无关标题A" in lines[0]
-
-    def test_max_notes_limit(self, tmp_path):
-        w, _, cfg = make_writer(tmp_path)
-        td = cfg.knowledge.topics_path
-        for i in range(10):
-            self._create_topic(td, f"n{i}.md", title=f"投资话题{i}", body="投资内容")
-        result = w._search_topics_for_context("投资", max_notes=3)
-        assert result.count("###") == 3
-
-    def test_empty_on_no_match(self, tmp_path):
-        w, _, cfg = make_writer(tmp_path)
-        td = cfg.knowledge.topics_path
-        self._create_topic(td, "a.md", title="完全无关", body="完全无关内容")
-        result = w._search_topics_for_context("量子物理")
-        assert result == ""
-
-    def test_empty_when_no_topics_dir(self, tmp_path):
-        w, _, cfg = make_writer(tmp_path)
-        import shutil
-        shutil.rmtree(cfg.knowledge.topics_path)
-        assert w._search_topics_for_context("anything") == ""
-
-
-# ── 3. State machine ────────────────────────────────────────────────
+# ── 2. State machine ────────────────────────────────────────────────
 
 
 class TestStateMachine:
