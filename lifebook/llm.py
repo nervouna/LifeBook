@@ -124,3 +124,75 @@ class LLMClient:
         resp = self.client.messages.create(**kwargs)
         parts = [getattr(b, "text", "") for b in resp.content if getattr(b, "type", None) == "text"]
         return "".join(parts).strip()
+
+    def agentic_call(
+        self,
+        system: str,
+        messages: list[dict],
+        tools: list[dict],
+        tool_executor: dict[str, callable],
+        model: str | None = None,
+        max_tokens: int | None = None,
+        max_rounds: int = 3,
+    ) -> str:
+        """Multi-turn tool-use loop. Returns final text response.
+
+        DeepSeek may emit multiple tool_use blocks per response — all must be
+        processed before sending results back.
+        """
+        msgs = list(messages)
+
+        for _round in range(max_rounds):
+            kwargs: dict[str, Any] = {
+                "model": model or self.cfg.model,
+                "max_tokens": max_tokens or self.cfg.max_tokens,
+                "temperature": self.cfg.temperature,
+                "messages": msgs,
+                "tools": tools,
+                "tool_choice": {"type": "auto"},
+            }
+            if system:
+                kwargs["system"] = system
+
+            resp = self.client.messages.create(**kwargs)
+
+            # Collect tool_use blocks
+            tool_blocks = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
+
+            if not tool_blocks:
+                # No tool calls — extract text and return
+                parts = [getattr(b, "text", "") for b in resp.content if getattr(b, "type", None) == "text"]
+                return "".join(parts).strip()
+
+            # Process all tool_use blocks
+            msgs.append({"role": "assistant", "content": resp.content})
+
+            tool_results = []
+            for block in tool_blocks:
+                executor = tool_executor.get(block.name)
+                if executor:
+                    result_str = executor(block.input)
+                else:
+                    result_str = f"Unknown tool: {block.name}"
+                    logger.warning("Unknown tool requested: %s", block.name)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_str,
+                })
+
+            msgs.append({"role": "user", "content": tool_results})
+
+        # max_rounds exceeded — final call without tools to force text
+        kwargs = {
+            "model": model or self.cfg.model,
+            "max_tokens": max_tokens or self.cfg.max_tokens,
+            "temperature": self.cfg.temperature,
+            "messages": msgs,
+        }
+        if system:
+            kwargs["system"] = system
+
+        resp = self.client.messages.create(**kwargs)
+        parts = [getattr(b, "text", "") for b in resp.content if getattr(b, "type", None) == "text"]
+        return "".join(parts).strip()

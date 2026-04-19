@@ -7,6 +7,7 @@ from typing import Any
 
 from .config import Config
 from .llm import LLMClient
+from .web_search import WEB_SEARCH_TOOL, web_search
 from .notes import (
     new_post,
     now_iso,
@@ -465,9 +466,13 @@ class Writer:
             user_msg += f"\n\n[系统补充的存量笔记参考：\n{topic_context}]"
         messages.append({"role": "user", "content": user_msg})
 
-        response = self.llm.text_call(
+        response = self.llm.agentic_call(
             system=DISCUSS_SYSTEM,
             messages=messages,
+            tools=[WEB_SEARCH_TOOL],
+            tool_executor={
+                "web_search": lambda inp: web_search(inp["query"], self.cfg),
+            },
         )
 
         # Track history
