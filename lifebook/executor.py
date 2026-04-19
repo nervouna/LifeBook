@@ -22,6 +22,13 @@ from .store import NoteStore
 
 logger = logging.getLogger(__name__)
 
+STANDARD_SOURCE_FIELDS = frozenset({
+    "status", "source", "source_type", "created", "title",
+    "fetch_error", "fetch_at", "fetch_via", "fetched_at",
+    "processing_at", "processed_at", "topic_ref", "tags",
+    "category", "llm_draft", "skip_reason",
+})
+
 
 @dataclass
 class ProcessResult:
@@ -89,12 +96,15 @@ class Executor:
             return ProcessResult(source_path, False, error="no content to process")
 
         # 2. Ask LLM to extract
+        extra_meta = {k: v for k, v in post.metadata.items()
+                      if k not in STANDARD_SOURCE_FIELDS}
         existing_categories = self.store.existing_categories()
         user_prompt = self._build_extract_prompt(
             title_hint=post.get("title") or "",
             url=url,
             content=content,
             existing_categories=existing_categories,
+            extra_meta=extra_meta,
         )
         try:
             extracted = self.llm.structured_call(
@@ -155,6 +165,8 @@ class Executor:
             "status": "active",
         }
         topic_meta = {k: v for k, v in topic_meta.items() if v is not None}
+        for k, v in extra_meta.items():
+            topic_meta[f"source_{k}"] = v
 
         topic_dir = self.cfg.knowledge.topics_path / extracted["category"]
         stem = slugify(extracted["title"])
@@ -196,6 +208,7 @@ class Executor:
         url: str,
         content: str,
         existing_categories: list[str],
+        extra_meta: dict[str, str] | None = None,
     ) -> str:
         cats = "、".join(existing_categories) if existing_categories else "（暂无，请新建）"
         header = []
@@ -204,6 +217,9 @@ class Executor:
         if url:
             header.append(f"来源 URL：{url}")
         header.append(f"现有目录：{cats}")
+        if extra_meta:
+            meta_lines = "\n".join(f"- {k}: {v}" for k, v in extra_meta.items())
+            header.append(f"来源提供的结构化元数据：\n{meta_lines}")
         header_text = "\n".join(header)
         max_chars = 60000
         if len(content) > max_chars:

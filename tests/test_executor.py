@@ -217,3 +217,50 @@ class TestProcessFile:
         result = executor.process_file(path)
         assert result.ok is False
         assert "LLM failed" in result.error
+
+    def test_extra_frontmatter_preserved_in_prompt_and_topic(self, executor, mock_config):
+        from lifebook.notes import read_note, write_note
+        path = _write_source(
+            mock_config.knowledge.sources_path, "trending.md",
+            status="inbox",
+            source_type="trending",
+            source="https://github.com/owner/repo",
+            trending_source="github",
+            star_velocity="50.0",
+        )
+        post = read_note(path)
+        post.content = "A trending project about AI agents"
+        write_note(path, post)
+
+        executor.llm.structured_call.return_value = {
+            "title": "AI Agent Project",
+            "summary": "An AI agent framework",
+            "key_points": ["fast growing"],
+            "narrative": "Details about the project.",
+            "tags": ["资讯", "AI-Agent"],
+            "category": "AI技术",
+            "related_keywords": [],
+            "confidence": 0.9,
+        }
+
+        # Capture the user_prompt passed to structured_call
+        captured = {}
+        original_call = executor.llm.structured_call
+        def capture_call(**kwargs):
+            captured.update(kwargs)
+            return original_call.return_value
+        executor.llm.structured_call.side_effect = capture_call
+
+        result = executor.process_file(path)
+        assert result.ok is True
+
+        # Verify extra metadata appears in the LLM prompt
+        prompt = captured["user_prompt"]
+        assert "trending_source" in prompt
+        assert "github" in prompt
+        assert "star_velocity" in prompt
+
+        # Verify extra metadata carried into topic note frontmatter
+        topic_post = read_note(result.topic_path)
+        assert topic_post.get("source_trending_source") == "github"
+        assert str(topic_post.get("source_star_velocity")) == "50.0"
