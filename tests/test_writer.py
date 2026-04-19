@@ -136,6 +136,38 @@ class TestExtractSection:
         assert "概念内容" not in r1
         assert "正文内容" not in r1
 
+    def test_heading_inside_code_block_ignored(self):
+        """Headings inside fenced code blocks should not break extraction."""
+        body = (
+            "## 正文\n\n"
+            "一些文字。\n\n"
+            "```\n"
+            "## 这不是标题\n"
+            "```\n\n"
+            "更多正文内容。\n"
+        )
+        result = Writer._extract_section(body, "正文")
+        assert "一些文字" in result
+        assert "更多正文内容" in result
+        # Should not stop at the fake heading inside code block
+        assert "这不是标题" in result
+
+    def test_subheadings_preserved(self):
+        """### subheadings under a ## section should be included, not treated as next section."""
+        body = (
+            "## 正文\n\n"
+            "### 小节A\n\n"
+            "内容A\n\n"
+            "### 小节B\n\n"
+            "内容B\n\n"
+            "## 下一节\n\n"
+            "下一节内容\n"
+        )
+        result = Writer._extract_section(body, "正文")
+        assert "小节A" in result
+        assert "小节B" in result
+        assert "下一节" not in result
+
 
 class TestSplitChecklist:
     def test_separator(self):

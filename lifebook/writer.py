@@ -486,14 +486,28 @@ class Writer:
 
     @staticmethod
     def _extract_section(body: str, heading: str, keep_header: bool = False) -> str:
-        """Extract content under a ## heading from markdown body."""
+        """Extract content under a ## heading from markdown body.
+
+        Skips heading detection inside fenced code blocks (```).
+        Only matches ## (H2) headings, not ### or deeper.
+        """
+        import re
         lines = body.split("\n")
         start = None
         end = None
+        in_code_block = False
+        heading_re = re.compile(rf"^## {re.escape(heading)}\s*$")
+        any_h2_re = re.compile(r"^## .+")
         for i, line in enumerate(lines):
-            if line.strip().startswith(f"## {heading}"):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                continue
+            if heading_re.match(stripped):
                 start = i
-            elif start is not None and line.strip().startswith("## ") and i > start:
+            elif start is not None and any_h2_re.match(stripped) and i > start:
                 end = i
                 break
         if start is None:
