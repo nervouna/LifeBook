@@ -158,6 +158,11 @@ class FeishuBot:
             threading.Thread(target=self._run_publish_cmd, args=(message_id,), daemon=True).start()
             return
 
+        # Command: /restore
+        if stripped in ("/restore", "restore"):
+            threading.Thread(target=self._run_restore_cmd, args=(message_id,), daemon=True).start()
+            return
+
         # Command: /process
         if stripped in ("/process", "process"):
             threading.Thread(target=self._run_process_cmd, args=(message_id,), daemon=True).start()
@@ -311,6 +316,14 @@ class FeishuBot:
         except Exception as e:
             logger.exception("writer.handle_message failed")
             reply = f"[LifeBook] 写作处理失败：{e}"
+        self.reply_text(message_id, reply)
+
+    def _run_restore_cmd(self, message_id: str) -> None:
+        try:
+            reply = self.writer.restore_draft()
+        except Exception as e:
+            logger.exception("writer.restore_draft failed")
+            reply = f"[LifeBook] 恢复失败：{e}"
         self.reply_text(message_id, reply)
 
     def _run_update_index_cmd(self, message_id: str) -> None:

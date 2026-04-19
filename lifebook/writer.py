@@ -474,15 +474,36 @@ class Writer:
 
     # --------------- helpers ---------------
 
+    DRAFT_BACKUP_NAME = "draft.bak.md"
+
     def _load_draft(self):
         return read_note(self.draft_path)
 
+    @property
+    def _backup_path(self) -> Path:
+        return self.draft_path.with_suffix(".bak.md")
+
     def _save_draft(self, post) -> None:
+        if self.draft_path.exists():
+            import shutil
+            shutil.copy2(self.draft_path, self._backup_path)
         write_note(self.draft_path, post)
 
     def _delete_draft(self) -> None:
         if self.draft_path.exists():
             self.draft_path.unlink()
+
+    def restore_draft(self) -> str:
+        """Restore draft from backup. Returns status message."""
+        with self._lock:
+            bak = self._backup_path
+            if not bak.exists():
+                return "没有可恢复的备份。"
+            import shutil
+            shutil.copy2(bak, self.draft_path)
+            stage = self.stage or "unknown"
+            logger.info("draft restored from backup, stage=%s", stage)
+            return f"已恢复到上一版本（阶段：{stage}）"
 
     @staticmethod
     def _extract_section(body: str, heading: str, keep_header: bool = False) -> str:

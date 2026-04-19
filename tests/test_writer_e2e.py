@@ -184,7 +184,7 @@ class TestFullWritingFlow:
         assert not w.draft_path.exists()
 
         # Verify published file
-        pub_files = [f for f in cfg.knowledge.publish_path.glob("*.md") if f.name != "draft.md"]
+        pub_files = [f for f in cfg.knowledge.publish_path.glob("*.md") if f.name not in ("draft.md", "draft.bak.md")]
         assert len(pub_files) == 1
         pub_post = read_note(pub_files[0])
         assert pub_post.get("title") == "测试主题"

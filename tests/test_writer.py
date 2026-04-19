@@ -273,8 +273,8 @@ class TestPublish:
         assert not w.draft_path.exists()
         # Check published file exists
         pub_files = list(cfg.knowledge.publish_path.glob("*.md"))
-        # Filter out draft.md (shouldn't exist)
-        pub_files = [f for f in pub_files if f.name != "draft.md"]
+        # Filter out draft.md and draft.bak.md
+        pub_files = [f for f in pub_files if f.name not in ("draft.md", "draft.bak.md")]
         assert len(pub_files) == 1
 
     def test_publish_rejects_concept_stage(self, tmp_path):
@@ -461,3 +461,45 @@ class TestHistoryCap:
         # First entry should not be from round 0
         first_content = w._history[0]["content"]
         assert "反馈0" not in first_content
+
+
+# ── 8. Draft versioning ───────────────────────────────────────────
+
+
+class TestDraftVersioning:
+    def test_backup_created_on_save(self, tmp_path):
+        """Saving a draft should create draft.bak.md with the previous version."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        # First save creates draft.md, no backup yet (nothing to back up)
+        assert w.draft_path.exists()
+        bak_path = w.draft_path.with_suffix(".bak.md")
+        assert not bak_path.exists()
+
+        # Second save should create backup
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        assert bak_path.exists()
+        bak_post = read_note(bak_path)
+        assert "核心概念" in bak_post.content
+
+    def test_restore_draft(self, tmp_path):
+        """restore_draft() should copy draft.bak.md over draft.md."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+
+        # Now restore — draft should go back to concept stage
+        result = w.restore_draft()
+        assert "已恢复" in result
+        post = read_note(w.draft_path)
+        assert post.get("stage") == STAGE_CONCEPT
+
+    def test_restore_no_backup(self, tmp_path):
+        """restore_draft() with no backup should return error message."""
+        w, llm, cfg = make_writer(tmp_path)
+        result = w.restore_draft()
+        assert "没有可恢复" in result
