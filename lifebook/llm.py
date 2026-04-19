@@ -1,38 +1,44 @@
-"""LLM client wrapper (Anthropic-compatible API).
+"""LLM client wrapper (OpenAI-compatible API).
 
-Provides a `structured_call` helper that uses tool_use (function calling)
-to reliably extract structured output from the model.
+Provides `structured_call`, `text_call`, and `agentic_call` helpers
+for structured output, plain text generation, and multi-turn tool use.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
-from anthropic import Anthropic
+from openai import OpenAI
 
 from .config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
 
+def _to_openai_tool(tool: dict) -> dict:
+    """Convert provider-agnostic tool dict to OpenAI function-calling format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool["input_schema"],
+        },
+    }
+
+
 class LLMClient:
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
-        # Defeat env-var pollution from ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
-        # by explicitly pinning the Authorization Bearer header. default_headers
-        # override the SDK's auto-injected auth headers.
-        headers = {
-            "Authorization": f"Bearer {cfg.api_key}",
-            "x-api-key": cfg.api_key,  # some Anthropic-compatible endpoints use this
+        kwargs: dict[str, Any] = {
+            "api_key": cfg.api_key,
+            "base_url": cfg.base_url,
+            "timeout": cfg.timeout,
         }
         if cfg.extra_headers:
-            headers.update(cfg.extra_headers)
-        self.client = Anthropic(
-            api_key=cfg.api_key,
-            base_url=cfg.base_url,
-            default_headers=headers,
-            timeout=cfg.timeout,
-        )
+            kwargs["default_headers"] = cfg.extra_headers
+        self.client = OpenAI(**kwargs)
 
     def structured_call(
         self,
@@ -47,44 +53,45 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Force the model to produce structured output via tool_use.
 
-        Returns the tool input dict. Retries once on empty tool_use input
-        (some providers occasionally emit empty blocks under load).
+        Returns the tool input dict. Retries on empty tool_use input.
         Raises RuntimeError after max_retries if no valid tool_use block.
         """
-        tool = {
+        tool = _to_openai_tool({
             "name": tool_name,
             "description": tool_description,
             "input_schema": input_schema,
-        }
+        })
         last_error: str | None = None
         for attempt in range(max_retries + 1):
-            kwargs: dict[str, Any] = {
-                "model": model or self.cfg.model,
-                "max_tokens": max_tokens or self.cfg.max_tokens,
-                "temperature": self.cfg.temperature,
-                "tools": [tool],
-                "tool_choice": {"type": "tool", "name": tool_name},
-                "messages": [{"role": "user", "content": user_prompt}],
-            }
+            messages: list[dict[str, Any]] = []
             if system:
-                kwargs["system"] = system
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": user_prompt})
 
-            resp = self.client.messages.create(**kwargs)
-            result: dict[str, Any] | None = None
-            for block in resp.content:
-                if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
-                    result = dict(block.input)
-                    break
-
-            if result is None:
-                last_error = (
-                    f"no tool_use block (stop_reason={resp.stop_reason}, "
-                    f"blocks={[getattr(b, 'type', None) for b in resp.content]})"
-                )
-            elif not result:
-                last_error = f"empty tool_use input (stop_reason={resp.stop_reason})"
+            resp = self.client.chat.completions.create(
+                model=model or self.cfg.model,
+                max_tokens=max_tokens or self.cfg.max_tokens,
+                temperature=self.cfg.temperature,
+                tools=[tool],
+                tool_choice={"type": "function", "function": {"name": tool_name}},
+                messages=messages,
+            )
+            msg = resp.choices[0].message
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    if tc.function.name == tool_name:
+                        result = json.loads(tc.function.arguments)
+                        if result:
+                            return result
+                        last_error = f"empty tool_use input (finish_reason={resp.choices[0].finish_reason})"
+                        break
+                else:
+                    last_error = f"no matching tool call for {tool_name}"
             else:
-                return result
+                last_error = (
+                    f"no tool_calls (finish_reason={resp.choices[0].finish_reason}, "
+                    f"content={msg.content!r})"
+                )
 
             logger.warning(
                 "structured_call attempt %d/%d failed: %s",
@@ -101,29 +108,24 @@ class LLMClient:
         max_tokens: int | None = None,
         messages: list[dict[str, str]] | None = None,
     ) -> str:
-        """Plain text generation (for digest writing, etc.).
-
-        Either pass user_prompt (single turn) or messages (multi-turn).
-        """
+        """Plain text generation (for digest writing, etc.)."""
         if messages is not None:
-            msg_list = messages
+            msg_list = list(messages)
         elif user_prompt is not None:
             msg_list = [{"role": "user", "content": user_prompt}]
         else:
             raise ValueError("Either user_prompt or messages must be provided")
 
-        kwargs: dict[str, Any] = {
-            "model": model or self.cfg.model,
-            "max_tokens": max_tokens or self.cfg.max_tokens,
-            "temperature": self.cfg.temperature,
-            "messages": msg_list,
-        }
         if system:
-            kwargs["system"] = system
+            msg_list = [{"role": "system", "content": system}] + msg_list
 
-        resp = self.client.messages.create(**kwargs)
-        parts = [getattr(b, "text", "") for b in resp.content if getattr(b, "type", None) == "text"]
-        return "".join(parts).strip()
+        resp = self.client.chat.completions.create(
+            model=model or self.cfg.model,
+            max_tokens=max_tokens or self.cfg.max_tokens,
+            temperature=self.cfg.temperature,
+            messages=msg_list,
+        )
+        return (resp.choices[0].message.content or "").strip()
 
     def agentic_call(
         self,
@@ -135,64 +137,56 @@ class LLMClient:
         max_tokens: int | None = None,
         max_rounds: int = 3,
     ) -> str:
-        """Multi-turn tool-use loop. Returns final text response.
-
-        DeepSeek may emit multiple tool_use blocks per response — all must be
-        processed before sending results back.
-        """
-        msgs = list(messages)
+        """Multi-turn tool-use loop. Returns final text response."""
+        openai_tools = [_to_openai_tool(t) for t in tools]
+        msgs: list[dict[str, Any]] = [{"role": "system", "content": system}] + list(messages)
 
         for _round in range(max_rounds):
-            kwargs: dict[str, Any] = {
-                "model": model or self.cfg.model,
-                "max_tokens": max_tokens or self.cfg.max_tokens,
-                "temperature": self.cfg.temperature,
-                "messages": msgs,
-                "tools": tools,
-                "tool_choice": {"type": "auto"},
-            }
-            if system:
-                kwargs["system"] = system
+            resp = self.client.chat.completions.create(
+                model=model or self.cfg.model,
+                max_tokens=max_tokens or self.cfg.max_tokens,
+                temperature=self.cfg.temperature,
+                messages=msgs,
+                tools=openai_tools,
+                tool_choice="auto",
+            )
+            msg = resp.choices[0].message
 
-            resp = self.client.messages.create(**kwargs)
+            if not msg.tool_calls:
+                return (msg.content or "").strip()
 
-            # Collect tool_use blocks
-            tool_blocks = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
+            # Append assistant message with tool calls
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": msg.content or ""}
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in msg.tool_calls
+            ]
+            msgs.append(assistant_msg)
 
-            if not tool_blocks:
-                # No tool calls — extract text and return
-                parts = [getattr(b, "text", "") for b in resp.content if getattr(b, "type", None) == "text"]
-                return "".join(parts).strip()
-
-            # Process all tool_use blocks
-            msgs.append({"role": "assistant", "content": resp.content})
-
-            tool_results = []
-            for block in tool_blocks:
-                executor = tool_executor.get(block.name)
+            # Execute tools and append results
+            for tc in msg.tool_calls:
+                executor = tool_executor.get(tc.function.name)
                 if executor:
-                    result_str = executor(block.input)
+                    args = json.loads(tc.function.arguments)
+                    result_str = executor(args)
                 else:
-                    result_str = f"Unknown tool: {block.name}"
-                    logger.warning("Unknown tool requested: %s", block.name)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
+                    result_str = f"Unknown tool: {tc.function.name}"
+                    logger.warning("Unknown tool requested: %s", tc.function.name)
+                msgs.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
                     "content": result_str,
                 })
 
-            msgs.append({"role": "user", "content": tool_results})
-
         # max_rounds exceeded — final call without tools to force text
-        kwargs = {
-            "model": model or self.cfg.model,
-            "max_tokens": max_tokens or self.cfg.max_tokens,
-            "temperature": self.cfg.temperature,
-            "messages": msgs,
-        }
-        if system:
-            kwargs["system"] = system
-
-        resp = self.client.messages.create(**kwargs)
-        parts = [getattr(b, "text", "") for b in resp.content if getattr(b, "type", None) == "text"]
-        return "".join(parts).strip()
+        resp = self.client.chat.completions.create(
+            model=model or self.cfg.model,
+            max_tokens=max_tokens or self.cfg.max_tokens,
+            temperature=self.cfg.temperature,
+            messages=msgs,
+        )
+        return (resp.choices[0].message.content or "").strip()
