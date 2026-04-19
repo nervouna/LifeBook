@@ -139,12 +139,12 @@ class Writer:
             else:
                 return f"未知状态：{stage}"
 
-    def publish(self) -> str:
+    def publish(self, *, force: bool = False) -> str:
         """Finalize: write to 99-publish/, evaluate backfill, delete draft."""
         with self._lock:
-            return self._publish()
+            return self._publish(force=force)
 
-    def _publish(self) -> str:
+    def _publish(self, *, force: bool = False) -> str:
         logger.info("publishing")
         if not self.active:
             return "当前没有进行中的写作。"

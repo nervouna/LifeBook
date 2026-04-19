@@ -225,5 +225,44 @@ def doctor(ctx: click.Context) -> None:
         click.echo(f"  {mark}  {name:<28} {detail}")
 
 
+@main.command("publish")
+@click.option("--force", is_flag=True, default=False, help="Force publish even if checklist has items.")
+@click.pass_context
+def publish_cmd(ctx: click.Context, force: bool) -> None:
+    """Publish the current draft to the knowledge base."""
+    from .writer import Writer
+    from .llm import LLMClient
+    cfg = ctx.obj["config"]
+    w = Writer(cfg, LLMClient(cfg.llm))
+    result = w.publish(force=force)
+    click.echo(result)
+
+
+@main.command("writer-status")
+@click.pass_context
+def writer_status_cmd(ctx: click.Context) -> None:
+    """Show writer session status."""
+    from .writer import Writer
+    from .llm import LLMClient
+    cfg = ctx.obj["config"]
+    w = Writer(cfg, LLMClient(cfg.llm))
+    if w.active:
+        click.echo(f"写作模式：进行中（阶段：{w.stage}）")
+    else:
+        click.echo("写作模式：未启动")
+
+
+@main.command("restore")
+@click.pass_context
+def restore_cmd(ctx: click.Context) -> None:
+    """Restore draft from backup."""
+    from .writer import Writer
+    from .llm import LLMClient
+    cfg = ctx.obj["config"]
+    w = Writer(cfg, LLMClient(cfg.llm))
+    result = w.restore_draft()
+    click.echo(result)
+
+
 if __name__ == "__main__":
     main()
