@@ -577,3 +577,46 @@ class TestPartialDraftUpdate:
         updated = "全新内容"
         result = Writer._splice_unchanged(original, updated)
         assert result == updated
+
+
+# ── 10. Parse outline ─────────────────────────────────────────────
+
+
+class TestParseOutline:
+    FRAMEWORK_BODY = (
+        "### 方案 1：问题驱动型\n"
+        "- **引言**：C/C++ 的内存安全痛点\n"
+        "- **论证**：Rust 所有权如何解决\n"
+        "- **总结**：实际效果评估\n\n"
+        "### 方案 2：机制解析型\n"
+        "- **背景**：所有权系统的三个规则\n"
+        "- **应用**：规则如何阻止漏洞\n"
+    )
+
+    def test_parse_by_number(self):
+        result = Writer._parse_outline(self.FRAMEWORK_BODY, "选方案1")
+        assert len(result) == 3
+        assert result[0] == {"heading": "引言", "point": "C/C++ 的内存安全痛点"}
+        assert result[1]["heading"] == "论证"
+        assert result[2]["heading"] == "总结"
+
+    def test_parse_by_name(self):
+        result = Writer._parse_outline(self.FRAMEWORK_BODY, "方案2")
+        assert len(result) == 2
+        assert result[0]["heading"] == "背景"
+
+    def test_parse_second_scheme(self):
+        result = Writer._parse_outline(self.FRAMEWORK_BODY, "选方案 2")
+        assert len(result) == 2
+        assert result[0] == {"heading": "背景", "point": "所有权系统的三个规则"}
+
+    def test_parse_no_match_returns_first(self):
+        """When feedback doesn't match any方案, default to the first."""
+        result = Writer._parse_outline(self.FRAMEWORK_BODY, "随便写")
+        assert len(result) == 3
+        assert result[0]["heading"] == "引言"
+
+    def test_parse_single_scheme(self):
+        body = "### 方案 1：唯一方案\n- **第一节**：要点一\n- **第二节**：要点二\n"
+        result = Writer._parse_outline(body, "确认")
+        assert len(result) == 2

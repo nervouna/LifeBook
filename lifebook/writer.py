@@ -614,3 +614,54 @@ class Writer:
         for heading in upd_sections:
             result_parts.append(upd_sections[heading])
         return "\n".join(result_parts)
+
+    @staticmethod
+    def _parse_outline(body: str, feedback: str) -> list[dict[str, str]]:
+        """Parse framework body to extract outline items for the selected方案.
+
+        Returns list of {"heading": ..., "point": ...} for the chosen方案.
+        Defaults to first方案 if feedback doesn't match any.
+        """
+        import re
+
+        # Split into scheme blocks: "### 方案 N：name\n- **h**：p\n..."
+        scheme_re = re.compile(r"^### (方案\s*\d+)\s*[：:]\s*(.+)$")
+        item_re = re.compile(r"^-\s+\*\*(.+?)\*\*\s*[：:]\s*(.+)$")
+
+        schemes: list[tuple[str, str, list[dict[str, str]]]] = []
+        current_name: str | None = None
+        current_label: str | None = None
+        current_items: list[dict[str, str]] = []
+
+        for line in body.split("\n"):
+            stripped = line.strip()
+            m = scheme_re.match(stripped)
+            if m:
+                if current_label is not None:
+                    schemes.append((current_label, current_name or "", current_items))
+                current_label = m.group(1).replace(" ", "")
+                current_name = m.group(2).strip()
+                current_items = []
+                continue
+            m = item_re.match(stripped)
+            if m and current_label is not None:
+                current_items.append({"heading": m.group(1), "point": m.group(2)})
+
+        if current_label is not None:
+            schemes.append((current_label, current_name or "", current_items))
+
+        if not schemes:
+            return []
+
+        # Match feedback to a scheme
+        fb = feedback.replace(" ", "")
+        for label, name, items in schemes:
+            if label in fb or name in fb:
+                return items
+            # "选方案1" / "方案2" patterns
+            num_match = re.search(r"方案(\d+)", label)
+            if num_match and num_match.group(1) in fb:
+                return items
+
+        # Default to first
+        return schemes[0][2]
