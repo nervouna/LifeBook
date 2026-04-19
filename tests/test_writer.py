@@ -84,6 +84,13 @@ CONTENT_TEXT = """\
 - 推理：因果推断
 """
 
+# Sequential content generation: 2 sections (引言, 论证) + checklist
+CONTENT_SECTIONS = [
+    "这是引言段落。",       # section 1
+    "这是论证段落。",       # section 2
+    "- 数据来源：2023年\n- 推理：因果推断",  # checklist
+]
+
 BACKFILL_RESULT = {
     "should_backfill": True,
     "items": [
@@ -227,14 +234,19 @@ class TestStateMachine:
         # concept
         llm.structured_call.return_value = CONCEPT_RESULT
         w.start("idea")
-        # framework
+        # framework (方案A has 2 sections: 引言, 论证)
         llm.structured_call.return_value = FRAMEWORK_RESULT
         w.handle_message("确认")
-        # content
-        llm.text_call.return_value = CONTENT_TEXT
+        # content: section-by-section (2 sections + 1 checklist)
+        llm.text_call.side_effect = [
+            "这是引言段落。",     # section 1
+            "这是论证段落。",     # section 2
+            "- 数据来源：2023年",  # checklist
+        ]
         result = w.handle_message("选方案1")
         assert w.stage == STAGE_CONTENT
         assert "引言" in result
+        assert "论证" in result
 
     def test_handle_message_content_goes_to_review(self, tmp_path):
         w, llm, cfg = make_writer(tmp_path)
@@ -242,7 +254,7 @@ class TestStateMachine:
         w.start("idea")
         llm.structured_call.return_value = FRAMEWORK_RESULT
         w.handle_message("确认")
-        llm.text_call.return_value = CONTENT_TEXT
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
         w.handle_message("选方案1")
         # discuss
         llm.agentic_call.return_value = "好的，我已修改了引言部分。"
@@ -260,7 +272,7 @@ class TestPublish:
         w.start("idea")
         llm.structured_call.return_value = FRAMEWORK_RESULT
         w.handle_message("确认")
-        llm.text_call.return_value = CONTENT_TEXT
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
         w.handle_message("选方案1")
         return w, llm, cfg
 
@@ -402,7 +414,7 @@ class TestThreadSafety:
         w.start("idea")
         llm.structured_call.return_value = FRAMEWORK_RESULT
         w.handle_message("确认")
-        llm.text_call.return_value = CONTENT_TEXT
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
         w.handle_message("选方案1")
 
         # Now at content stage — two threads discuss simultaneously
@@ -440,7 +452,7 @@ class TestThreadSafety:
         w.start("idea")
         llm.structured_call.return_value = FRAMEWORK_RESULT
         w.handle_message("确认")
-        llm.text_call.return_value = CONTENT_TEXT
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
         w.handle_message("选方案1")
         llm.structured_call.return_value = {"should_backfill": False, "items": []}
 
@@ -486,7 +498,7 @@ class TestHistoryCap:
         w.start("idea")
         llm.structured_call.return_value = FRAMEWORK_RESULT
         w.handle_message("确认")
-        llm.text_call.return_value = CONTENT_TEXT
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
         w.handle_message("选方案1")
         return w, llm, cfg
 

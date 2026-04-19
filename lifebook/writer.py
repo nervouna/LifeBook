@@ -20,12 +20,14 @@ from .notes import (
 from .prompts import (
     BACKFILL_SYSTEM,
     BACKFILL_TOOL_SCHEMA,
+    CHECKLIST_SYSTEM,
     CONCEPT_SYSTEM,
     CONCEPT_TOOL_SCHEMA,
     CONTENT_SYSTEM,
     DISCUSS_SYSTEM,
     FRAMEWORK_SYSTEM,
     FRAMEWORK_TOOL_SCHEMA,
+    SECTION_SYSTEM,
     UPDATE_DRAFT_TOOL,
 )
 from .store import NoteStore
@@ -263,40 +265,68 @@ class Writer:
         )
 
     def _advance_to_content(self, feedback: str) -> str:
-        """User chose/modified framework → generate full content."""
-        logger.info("advancing to content stage")
+        """User chose/modified framework → generate content section by section."""
+        logger.info("advancing to content stage (sequential)")
         post = self._load_draft()
 
         concept_section = self._extract_section(post.content, "核心概念")
         framework_section = self._extract_section(post.content, "框架")
         topic_context = self.store.search_topics_formatted(concept_section)
 
-        prompt = (
-            f"核心概念：\n{concept_section}\n\n"
-            f"可选框架：\n{framework_section}\n\n"
-            f"用户选择/反馈：\n{feedback}"
-        )
-        if topic_context:
-            prompt += f"\n\n存量笔记参考：\n{topic_context}"
+        # Parse outline from framework
+        outline = self._parse_outline(framework_section, feedback)
+        if not outline:
+            # Fallback: generate all at once if outline parsing fails
+            prompt = (
+                f"核心概念：\n{concept_section}\n\n"
+                f"可选框架：\n{framework_section}\n\n"
+                f"用户选择/反馈：\n{feedback}"
+            )
+            if topic_context:
+                prompt += f"\n\n存量笔记参考：\n{topic_context}"
+            content = self.llm.text_call(user_prompt=prompt, system=CONTENT_SYSTEM)
+            content_body, checklist = self._split_checklist(content)
+            sections_text = content_body.strip()
+            checklist_text = checklist.strip() if checklist else ""
+        else:
+            # Generate each section sequentially
+            generated_sections: list[str] = []
+            for item in outline:
+                previous = "\n\n".join(generated_sections) if generated_sections else "（还没有已写好的章节）"
+                prompt = (
+                    f"核心概念：\n{concept_section}\n\n"
+                    f"文章框架：\n{framework_section}\n\n"
+                    f"之前已写好的章节：\n{previous}\n\n"
+                    f"请展开这一节：\n## {item['heading']}\n\n{item['point']}"
+                )
+                if topic_context:
+                    prompt += f"\n\n存量笔记参考：\n{topic_context}"
+                section_content = self.llm.text_call(
+                    user_prompt=prompt,
+                    system=SECTION_SYSTEM,
+                )
+                generated_sections.append(section_content.strip())
 
-        content = self.llm.text_call(
-            user_prompt=prompt,
-            system=CONTENT_SYSTEM,
-        )
-        logger.info("content generated, length=%d", len(content))
+            # Generate checklist separately
+            full_body = "\n\n".join(generated_sections)
+            checklist_prompt = f"文章正文：\n{full_body}"
+            checklist_text = self.llm.text_call(
+                user_prompt=checklist_prompt,
+                system=CHECKLIST_SYSTEM,
+            ).strip()
+            sections_text = "\n\n".join(generated_sections)
 
         # Update draft
-        content_body, checklist = self._split_checklist(content)
         post.content = (
             self._extract_section(post.content, "核心概念", keep_header=True)
             + "\n\n"
             + self._extract_section(post.content, "框架", keep_header=True)
             + "\n\n## 正文\n\n"
-            + content_body.strip()
+            + sections_text
             + "\n"
         )
-        if checklist:
-            post.content += f"\n## 自检清单\n\n{checklist.strip()}\n"
+        if checklist_text:
+            post.content += f"\n## 自检清单\n\n{checklist_text}\n"
 
         post["stage"] = STAGE_CONTENT
         post["updated"] = now_iso()
@@ -304,11 +334,11 @@ class Writer:
 
         # Init discussion history
         self._history = [
-            {"role": "assistant", "content": content},
+            {"role": "assistant", "content": sections_text},
         ]
 
         return (
-            content
+            sections_text
             + "\n\n---\n"
             "请逐段审读。可以对任何内容提出质疑、修改意见，或对自检清单做出回应。"
             "满意后发送 /publish 完成发布。"

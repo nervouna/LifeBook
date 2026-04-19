@@ -131,9 +131,11 @@ class TestFullWritingFlow:
             FRAMEWORK_RESULT,    # handle_message("确认") -> framework
             BACKFILL_NONE,       # publish() -> backfill eval
         ]
-        # text_call sequence: content only (discuss now uses agentic_call)
+        # text_call sequence: section-by-section (2 sections + 1 checklist)
         llm.text_call.side_effect = [
-            CONTENT_TEXT,        # handle_message("选方案1") -> content
+            "这是引言段落。",     # section 1 (引言)
+            "这是论证段落。",     # section 2 (论证)
+            "- 数据来源：2023年\n- 推理：因果推断",  # checklist
         ]
         # agentic_call sequence: discuss1, discuss2
         llm.agentic_call.side_effect = [
