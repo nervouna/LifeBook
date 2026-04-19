@@ -8,7 +8,7 @@ from .config import KnowledgeConfig
 from .notes import new_post, now_iso, now_ts_compact, slugify, unique_path, write_note
 
 
-SourceType = Literal["webclip", "chat_link", "chat_note", "manual"]
+SourceType = Literal["webclip", "chat_link", "chat_note", "manual", "trending"]
 
 
 def ingest_url(
