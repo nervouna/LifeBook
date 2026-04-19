@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 from .config import Config
 from .llm import LLMClient
-from .web_search import WEB_SEARCH_TOOL, web_search
+from .fetcher import WEB_SEARCH_TOOL, web_search
 from .notes import (
     new_post,
     now_iso,
@@ -15,9 +14,20 @@ from .notes import (
     sanitize_tags,
     slugify,
     unique_path,
-    wikilink_text,
     write_note,
 )
+from .prompts import (
+    BACKFILL_SYSTEM,
+    BACKFILL_TOOL_SCHEMA,
+    CONCEPT_SYSTEM,
+    CONCEPT_TOOL_SCHEMA,
+    CONTENT_SYSTEM,
+    DISCUSS_SYSTEM,
+    FRAMEWORK_SYSTEM,
+    FRAMEWORK_TOOL_SCHEMA,
+    UPDATE_DRAFT_TOOL,
+)
+from .store import NoteStore
 
 logger = logging.getLogger(__name__)
 
@@ -28,198 +38,16 @@ STAGE_FRAMEWORK = "framework"
 STAGE_CONTENT = "content"
 STAGE_REVIEW = "review"
 
-# --------------- prompts ---------------
-
-CONCEPT_SYSTEM = """\
-你是一位写作助手。用户会给你一个写作想法，你需要结合提供的存量笔记内容，生成一段核心概念（约100字）。
-
-核心概念必须包含三个要素：
-1. 主题：这篇文章讲什么
-2. 核心主张：这篇文章认为什么（必须有明确立场）
-3. 预期读者：写给谁看
-
-没有立场的文章没有写的必要。如果用户的想法本身缺乏立场，你应该基于存量内容推断一个可能的立场，供用户确认或修改。
-"""
-
-CONCEPT_TOOL_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "topic": {
-            "type": "string",
-            "description": "主题：这篇文章讲什么（一句话）",
-        },
-        "thesis": {
-            "type": "string",
-            "description": "核心主张：这篇文章认为什么（一句话，有明确立场）",
-        },
-        "audience": {
-            "type": "string",
-            "description": "预期读者：写给谁看（一句话）",
-        },
-        "concept_text": {
-            "type": "string",
-            "description": "完整的核心概念（约100字，融合以上三要素的连贯文本）",
-        },
-    },
-    "required": ["topic", "thesis", "audience", "concept_text"],
-}
-
-FRAMEWORK_SYSTEM = """\
-你是一位写作助手。用户已确认了核心概念，现在需要你提出 2-3 个不同的文章框架方案。
-
-每个框架方案包含：
-- 方案名称（一个短语概括结构特点）
-- 大纲（各段/节标题 + 一句话描述该段要点）
-
-不同方案应在结构、论证路径、切入角度上有实质差异，而非仅仅重新排列段落顺序。
-"""
-
-FRAMEWORK_TOOL_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "frameworks": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "方案名称"},
-                    "outline": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "heading": {"type": "string"},
-                                "point": {"type": "string"},
-                            },
-                            "required": ["heading", "point"],
-                        },
-                        "description": "各段大纲",
-                    },
-                },
-                "required": ["name", "outline"],
-            },
-            "description": "2-3 个框架方案",
-        },
-    },
-    "required": ["frameworks"],
-}
-
-CONTENT_SYSTEM = """\
-你是一位写作助手。用户已确认了核心概念和文章框架，现在需要你延展为完整内容。
-
-要求：
-1. 严格按照框架大纲的结构展开，使用 Markdown 格式
-2. 内容要有实质性的论证和事实支撑，不要空洞
-3. 保持核心主张的一致性
-4. 行文连贯，段落之间有逻辑衔接
-
-输出完正文后，你必须附上一份「自检清单」，主动标记以下问题：
-- 数据/事实可能过时（标注来源年份）
-- 因果推断缺乏直接证据（标注为你的推理）
-- 与存量笔记中已有观点矛盾（指出矛盾点）
-- 论证依赖的隐含前提假设（说明假设内容）
-
-自检清单用 Markdown 列表格式，放在正文之后，用 `---` 分隔。
-"""
-
-DISCUSS_SYSTEM = """\
-你是一位写作助手，正在与用户讨论文章内容。
-
-核心原则：
-1. 不迎合。如果用户的质疑缺乏依据，你应该礼貌但明确地指出
-2. 如果你认为用户是对的，直接承认并说明如何修改
-3. 引用存量笔记和搜索结果作为论据，不要凭空论证
-4. 你的文字回复只包含讨论内容：回应用户的问题、论证观点、解释推理
-5. 不要在文字回复中包含完整文章或自检清单
-6. 当需要更新文章时，调用 update_draft 工具提交修改后的完整正文
-7. 如果讨论尚未达成修改共识，可以只回复讨论文字，不调用工具
-8. 更新时只调用一次 update_draft，提交完整文章
-
-用户可能：
-- 对某个段落提出具体质疑
-- 要求补充或删减内容
-- 对自检清单中的项目做出回应
-- 提出新的论点或角度
-
-你应该就事论事地回应，需要修改时通过 update_draft 工具提交。
-"""
-
-BACKFILL_SYSTEM = """\
-你是一位知识管理助手。请评估这篇文章是否产生了值得回填到知识库的新知识。
-
-回填的硬规则（必须严格遵守，只有符合条件才回填）：
-1. 文章中引用了存量 topics 里没有的事实、数据或来源
-2. 文章对已有 topic 提出了明确不同的结论
-
-不符合以上任一条件，则不回填。不要因为"相关"或"有价值"就回填，只有真正的新增信息才有资格。
-"""
-
-BACKFILL_TOOL_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "should_backfill": {
-            "type": "boolean",
-            "description": "是否需要回填",
-        },
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["create", "update"],
-                        "description": "新建 topic 还是更新已有 topic",
-                    },
-                    "topic_title": {
-                        "type": "string",
-                        "description": "目标 topic 标题（更新时为已有标题，新建时为建议标题）",
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "回填理由：具体说明是什么新事实/数据/结论",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "要回填的内容（Markdown 片段）",
-                    },
-                },
-                "required": ["action", "topic_title", "reason", "content"],
-            },
-            "description": "需要回填的条目列表（should_backfill=false 时为空数组）",
-        },
-    },
-    "required": ["should_backfill", "items"],
-}
-
-UPDATE_DRAFT_TOOL = {
-    "name": "update_draft",
-    "description": "更新文章正文和自检清单。仅在讨论中达成修改共识后调用，提交修改后的完整正文。",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "content": {
-                "type": "string",
-                "description": "修改后的完整正文（Markdown 格式）"
-            },
-            "checklist": {
-                "type": "string",
-                "description": "更新后的自检清单（Markdown 列表格式，可为空字符串表示无需自检）"
-            }
-        },
-        "required": ["content"]
-    }
-}
-
 
 class Writer:
     """Interactive writing state machine with draft persistence."""
 
     DRAFT_NAME = "draft.md"
 
-    def __init__(self, cfg: Config, llm: LLMClient):
+    def __init__(self, cfg: Config, llm: LLMClient, store: NoteStore | None = None):
         self.cfg = cfg
         self.llm = llm
+        self.store = store or NoteStore(cfg.knowledge)
         self.draft_path = cfg.knowledge.publish_path / self.DRAFT_NAME
         # In-memory discussion history (lost on restart; that's fine)
         self._history: list[dict[str, str]] = []
@@ -245,7 +73,7 @@ class Writer:
             return "已有一篇草稿正在进行中。请先 /publish 完成或手动删除 draft.md 再开始新的写作。"
 
         # Search existing topics for context
-        topic_context = self._search_topics_for_context(idea)
+        topic_context = self.store.search_topics_formatted(idea)
         logger.debug("topic context hits: %d chars", len(topic_context))
 
         prompt = f"用户的写作想法：\n{idea}"
@@ -358,7 +186,7 @@ class Writer:
 
         # Update concept section if user provided modifications
         concept_section = self._extract_section(post.content, "核心概念")
-        topic_context = self._search_topics_for_context(concept_section)
+        topic_context = self.store.search_topics_formatted(concept_section)
 
         prompt = (
             f"已确认的核心概念：\n{concept_section}\n\n"
@@ -413,7 +241,7 @@ class Writer:
 
         concept_section = self._extract_section(post.content, "核心概念")
         framework_section = self._extract_section(post.content, "框架")
-        topic_context = self._search_topics_for_context(concept_section)
+        topic_context = self.store.search_topics_formatted(concept_section)
 
         prompt = (
             f"核心概念：\n{concept_section}\n\n"
@@ -466,7 +294,7 @@ class Writer:
         concept_section = self._extract_section(post.content, "核心概念")
         current_content = self._extract_section(post.content, "正文")
         current_checklist = self._extract_section(post.content, "自检清单")
-        topic_context = self._search_topics_for_context(feedback)
+        topic_context = self.store.search_topics_formatted(feedback)
 
         # Build conversation with history
         messages = [
@@ -541,7 +369,7 @@ class Writer:
     def _evaluate_backfill(self, title: str, content: str) -> str:
         """Evaluate whether the article produces new knowledge to backfill."""
         logger.info("evaluating backfill for %r", title)
-        topic_context = self._search_topics_for_context(title, max_notes=20)
+        topic_context = self.store.search_topics_formatted(title, max_notes=20)
         if not topic_context:
             return ""
 
@@ -609,30 +437,21 @@ class Writer:
     def _backfill_update(self, topic_title: str, content: str, source_title: str) -> bool:
         """Append content to an existing topic note. Returns True if found."""
         logger.info("backfill_update topic=%r", topic_title)
-        topics_root = self.cfg.knowledge.topics_path
-        if not topics_root.exists():
+        md = self.store.find_by_title(topic_title)
+        if md is None:
+            logger.debug("backfill_update topic=%r not found", topic_title)
             return False
-
-        # Find by title match
-        for md in topics_root.rglob("*.md"):
-            try:
-                post = read_note(md)
-            except Exception:
-                continue
-            if post.get("title") == topic_title or md.stem == slugify(topic_title):
-                # Append
-                logger.info("backfill_update found topic=%r at %s", topic_title, md)
-                post.content = (
-                    post.content.rstrip()
-                    + f"\n\n## 来自《{source_title}》的补充\n\n"
-                    + content.strip()
-                    + "\n"
-                )
-                post["updated"] = now_iso()
-                write_note(md, post)
-                return True
-        logger.debug("backfill_update topic=%r not found", topic_title)
-        return False
+        logger.info("backfill_update found topic=%r at %s", topic_title, md)
+        post = self.store.read_note(md)
+        post.content = (
+            post.content.rstrip()
+            + f"\n\n## 来自《{source_title}》的补充\n\n"
+            + content.strip()
+            + "\n"
+        )
+        post["updated"] = now_iso()
+        self.store.write_note(md, post)
+        return True
 
     # --------------- helpers ---------------
 
@@ -645,66 +464,6 @@ class Writer:
     def _delete_draft(self) -> None:
         if self.draft_path.exists():
             self.draft_path.unlink()
-
-    def _search_topics_for_context(self, query: str, max_notes: int = 5) -> str:
-        """Search topics using category/tag structured filtering + keyword matching."""
-        topics_root = self.cfg.knowledge.topics_path
-        if not topics_root.exists():
-            return ""
-
-        query_lower = query.lower()
-        words = [w for w in query_lower.split() if len(w) >= 2]
-        logger.debug("search_topics query_words=%d words=%r", len(words), words[:5])
-        if not words:
-            return ""
-
-        hits: list[tuple[float, str, str]] = []
-        for md in topics_root.rglob("*.md"):
-            try:
-                post = read_note(md)
-            except Exception:
-                continue
-
-            title = post.get("title") or md.stem
-            category = (post.get("category") or "").lower()
-            tags = [t.lower() for t in (post.get("tags") or [])]
-
-            # Layer 1: structured match (category + tags)
-            struct_score = 0.0
-            for w in words:
-                if w in category:
-                    struct_score += 3.0
-                for tag in tags:
-                    if w in tag:
-                        struct_score += 2.0
-                        break  # one match per word per note
-
-            # Layer 2: keyword match on title + content
-            title_lower = title.lower()
-            content_lower = post.content[:500].lower()
-            keyword_score = 0.0
-            for w in words:
-                if w in title_lower:
-                    keyword_score += 2.0
-                elif w in content_lower:
-                    keyword_score += 1.0
-
-            total = struct_score + keyword_score
-            if total > 0:
-                summary = post.content[:200].strip()
-                hits.append((total, title, summary))
-
-        hits.sort(key=lambda x: -x[0])
-        logger.debug("search_topics scanned files, hits=%d", len(hits))
-        hits = hits[:max_notes]
-
-        if not hits:
-            return ""
-
-        parts = []
-        for _, title, summary in hits:
-            parts.append(f"### {title}\n{summary}\n")
-        return "\n".join(parts)
 
     @staticmethod
     def _extract_section(body: str, heading: str, keep_header: bool = False) -> str:

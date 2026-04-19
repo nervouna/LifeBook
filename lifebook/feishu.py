@@ -6,7 +6,7 @@ import logging
 import re
 import threading
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
@@ -20,7 +20,11 @@ from lark_oapi.api.im.v1 import (
 from .config import Config
 from .executor import Executor, ProcessResult
 from .ingest import ingest_text, ingest_url
+from .store import NoteStore
 from .writer import Writer
+
+if TYPE_CHECKING:
+    from .indexer import Indexer
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +56,10 @@ def _strip_mentions(text: str, mentions: list | None) -> str:
 class FeishuBot:
     def __init__(self, cfg: Config, executor: Executor | None = None):
         self.cfg = cfg
-        self.executor = executor or Executor(cfg)
+        self.store = NoteStore(cfg.knowledge)
+        self.executor = executor or Executor(cfg, store=self.store)
         from .llm import LLMClient
-        self.writer = Writer(cfg, LLMClient(cfg.llm))
+        self.writer = Writer(cfg, LLMClient(cfg.llm), store=self.store)
         self.api = (
             lark.Client.builder()
             .app_id(cfg.feishu.app_id)
@@ -63,6 +68,7 @@ class FeishuBot:
             .build()
         )
         self._ws_client: lark.ws.Client | None = None
+        self.indexer: Indexer | None = None  # Will be initialized in start()
 
     # ---------- sending helpers ----------
 
@@ -155,6 +161,20 @@ class FeishuBot:
         # Command: /process
         if stripped in ("/process", "process"):
             threading.Thread(target=self._run_process_cmd, args=(message_id,), daemon=True).start()
+            return
+
+        # Command: /update-index
+        if stripped in ("/update-index", "update-index"):
+            threading.Thread(target=self._run_update_index_cmd, args=(message_id,), daemon=True).start()
+            return
+
+        # Command: /search <query>
+        if stripped.startswith("/search"):
+            query = stripped[len("/search"):].strip()
+            if not query:
+                self.reply_text(message_id, "[LifeBook] 请提供搜索词，例如：/search AI对创意工作的影响")
+                return
+            threading.Thread(target=self._run_search_cmd, args=(message_id, query), daemon=True).start()
             return
 
         # Command: /status
@@ -255,9 +275,8 @@ class FeishuBot:
         return "\n".join(lines) if lines else "[LifeBook] 没有结果。"
 
     def _reply_status(self, message_id: str) -> None:
-        inbox = self.executor.scan_inbox()
-        topics_dir = self.cfg.knowledge.topics_path
-        topic_count = sum(1 for _ in topics_dir.rglob("*.md")) if topics_dir.exists() else 0
+        inbox = self.store.scan_inbox()
+        topic_count = self.store.topic_count()
         writing_status = f"\n  写作模式：{'进行中 (' + self.writer.stage + ')' if self.writer.active else '未启动'}"
         self.reply_text(
             message_id,
@@ -294,9 +313,77 @@ class FeishuBot:
             reply = f"[LifeBook] 写作处理失败：{e}"
         self.reply_text(message_id, reply)
 
+    def _run_update_index_cmd(self, message_id: str) -> None:
+        """Handle /update-index command."""
+        try:
+            from .indexer import Indexer
+            indexer = Indexer(self.cfg)
+            stats = indexer.incremental_update()
+            
+            upserted = stats.get("upserted", 0)
+            deleted = stats.get("deleted", 0)
+            unchanged = stats.get("unchanged", 0)
+            errors = stats.get("errors", [])
+            
+            reply = f"[LifeBook] 向量索引更新完成\n"
+            reply += f"  新增/更新: {upserted}\n"
+            reply += f"  删除: {deleted}\n"
+            reply += f"  未变化: {unchanged}\n"
+            if errors:
+                reply += f"  错误: {len(errors)} 个\n"
+                for err in errors[:3]:  # Show first 3 errors
+                    reply += f"    - {err}\n"
+                if len(errors) > 3:
+                    reply += f"    ... 还有 {len(errors) - 3} 个错误\n"
+            
+        except Exception as e:
+            logger.exception("update-index failed")
+            reply = f"[LifeBook] 索引更新失败：{e}"
+        
+        self.reply_text(message_id, reply)
+
+    def _run_search_cmd(self, message_id: str, query: str) -> None:
+        """Handle /search <query> command."""
+        try:
+            from .vector import VectorIndex
+            persist_dir = self.cfg.knowledge.state_path / "vector_store"
+            vector = VectorIndex(persist_dir)
+            results = vector.search(query, n_results=5)
+
+            if not results:
+                self.reply_text(message_id, f"[LifeBook] 未找到与 '{query}' 相关的内容")
+                return
+
+            reply = f"[LifeBook] 搜索 '{query}' 结果（显示前 {len(results)} 个）:\n\n"
+            for i, r in enumerate(results, 1):
+                title = r.metadata.get("title", r.doc_id)
+                similarity = max(0, 1.0 - r.distance) * 100
+                preview = r.text[:100] + "..." if len(r.text) > 100 else r.text
+
+                reply += f"{i}. {title}\n"
+                reply += f"   相似度: {similarity:.1f}%\n"
+                reply += f"   路径: {r.doc_id}\n"
+                reply += f"   摘要: {preview}\n\n"
+
+        except Exception as e:
+            logger.exception("search failed")
+            reply = f"[LifeBook] 搜索失败：{e}"
+
+        self.reply_text(message_id, reply)
+
     # ---------- lifecycle ----------
 
     def start(self) -> None:
+        # Start indexer background thread
+        try:
+            from .indexer import Indexer
+            self.indexer = Indexer(self.cfg)
+            self.indexer.start()
+            logger.info("Indexer background thread started")
+        except Exception as e:
+            logger.warning("Failed to start indexer: %s", e)
+            self.indexer = None
+        
         handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._handle_message)
@@ -310,3 +397,12 @@ class FeishuBot:
         )
         logger.info("Feishu bot starting (long-connection WebSocket)...")
         self._ws_client.start()
+
+    def stop(self) -> None:
+        """Stop the bot and its background services."""
+        if self.indexer is not None:
+            self.indexer.stop()
+            logger.info("Indexer stopped")
+        if self._ws_client is not None:
+            self._ws_client.close()
+            logger.info("Feishu WebSocket closed")

@@ -1,6 +1,7 @@
 """Configuration loader."""
 from __future__ import annotations
 
+import dataclasses
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -110,6 +111,11 @@ class Config:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+def _filter(dc_cls, section):
+    allowed = {f.name for f in dataclasses.fields(dc_cls)}
+    return {k: v for k, v in (section or {}).items() if v is not None and k in allowed}
+
+
 def load_config(path: Path | str | None = None) -> Config:
     """Load configuration from YAML file."""
     cfg_path = Path(path) if path else Path(os.environ.get("LIFEBOOK_CONFIG", DEFAULT_CONFIG_PATH))
@@ -130,11 +136,6 @@ def load_config(path: Path | str | None = None) -> Config:
         state_dir=knowledge_raw.get("state_dir", ".lifebook"),
         publish_dir=knowledge_raw.get("publish_dir", "99-publish"),
     )
-
-    def _filter(dc_cls, section):
-        import dataclasses as _dc
-        allowed = {f.name for f in _dc.fields(dc_cls)}
-        return {k: v for k, v in (section or {}).items() if v is not None and k in allowed}
 
     llm = LLMConfig(**_filter(LLMConfig, raw.get("llm")))
     feishu = FeishuConfig(**_filter(FeishuConfig, raw.get("feishu")))
