@@ -43,11 +43,11 @@ class KnowledgeConfig:
 
 @dataclass
 class LLMConfig:
-    provider: str = "anthropic"
-    base_url: str = "https://api.anthropic.com"
+    provider: str = "openai"
+    base_url: str = "https://api.deepseek.com"
     api_key: str = ""
-    model: str = "claude-sonnet-4-5"
-    digest_model: str = "claude-sonnet-4-5"
+    model: str = "deepseek-chat"
+    digest_model: str = "deepseek-chat"
     max_tokens: int = 4096
     temperature: float = 0.3
     timeout: int = 120
