@@ -298,6 +298,23 @@ class TestPublish:
         result = w.publish()
         assert "没有进行中" in result
 
+    def test_publish_succeeds_when_backfill_fails(self, tmp_path):
+        """Publish should succeed even if backfill LLM call raises an exception."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+        # Need a topic so _evaluate_backfill actually calls LLM
+        topic_post = new_post("相关内容\n", title="测试主题相关")
+        w.store.write_note(cfg.knowledge.topics_path / "related.md", topic_post)
+
+        llm.structured_call.side_effect = RuntimeError("LLM timeout")
+        result = w.publish()
+        assert "已发布" in result
+        assert "回填" in result and "失败" in result
+        assert not w.draft_path.exists()
+        # Published file should exist
+        pub_files = [f for f in cfg.knowledge.publish_path.glob("*.md")
+                     if f.name not in ("draft.md", "draft.bak.md")]
+        assert len(pub_files) == 1
+
 
 # ── 5. Backfill ──────────────────────────────────────────────────────
 

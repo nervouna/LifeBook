@@ -408,7 +408,7 @@ class Writer:
             )
         except Exception as e:
             logger.warning("backfill evaluation failed: %s", e)
-            return ""
+            return f"（回填评估失败：{e}）"
 
         if not result.get("should_backfill") or not result.get("items"):
             logger.debug("backfill: nothing to backfill")
