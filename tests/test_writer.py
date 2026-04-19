@@ -303,3 +303,90 @@ class TestBackfill:
         shutil.rmtree(cfg.knowledge.topics_path)
         ok = w._backfill_update("任何主题", "内容", "来源")
         assert ok is False
+
+
+# ── 6. Thread safety ──────────────────────────────────────────────
+
+
+class TestThreadSafety:
+    def test_concurrent_handle_message_no_corruption(self, tmp_path):
+        """Two threads calling handle_message concurrently should not corrupt the draft."""
+        import threading
+
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        llm.text_call.return_value = CONTENT_TEXT
+        w.handle_message("选方案1")
+
+        # Now at content stage — two threads discuss simultaneously
+        llm.agentic_call.side_effect = [
+            "回复A: 已修改引言",
+            "回复B: 已修改论证",
+        ]
+
+        errors = []
+
+        def discuss(msg):
+            try:
+                w.handle_message(msg)
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=discuss, args=("修改引言",))
+        t2 = threading.Thread(target=discuss, args=("修改论证",))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"Concurrent access raised: {errors}"
+        # Draft should still be valid
+        assert w.active
+        assert w.stage in (STAGE_CONTENT, STAGE_REVIEW)
+
+    def test_concurrent_start_and_publish(self, tmp_path):
+        """start() and publish() running concurrently should not cause file corruption."""
+        import threading
+
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        llm.text_call.return_value = CONTENT_TEXT
+        w.handle_message("选方案1")
+        llm.structured_call.return_value = {"should_backfill": False, "items": []}
+
+        errors = []
+
+        def do_publish():
+            try:
+                w.publish()
+            except Exception as e:
+                errors.append(e)
+
+        def do_discuss():
+            try:
+                w.handle_message("修改引言")
+            except Exception as e:
+                errors.append(e)
+
+        llm.agentic_call.return_value = "已修改"
+        t1 = threading.Thread(target=do_publish)
+        t2 = threading.Thread(target=do_discuss)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"Concurrent access raised: {errors}"
+
+    def test_lock_exists_on_writer(self, tmp_path):
+        """Writer must have a threading.Lock for serializing public API calls."""
+        import threading
+        w, llm, cfg = make_writer(tmp_path)
+        assert hasattr(w, "_lock"), "Writer must have a _lock attribute"
+        assert isinstance(w._lock, type(threading.Lock())), "Writer._lock must be a threading.Lock"

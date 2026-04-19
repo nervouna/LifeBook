@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from .config import Config
@@ -51,6 +52,7 @@ class Writer:
         self.draft_path = cfg.knowledge.publish_path / self.DRAFT_NAME
         # In-memory discussion history (lost on restart; that's fine)
         self._history: list[dict[str, str]] = []
+        self._lock = threading.Lock()
 
     # --------------- public API ---------------
 
@@ -68,6 +70,10 @@ class Writer:
 
     def start(self, idea: str) -> str:
         """Begin a new writing session. Returns concept for user review."""
+        with self._lock:
+            return self._start(idea)
+
+    def _start(self, idea: str) -> str:
         logger.info("starting writing session, idea=%r", idea[:50])
         if self.active:
             return "已有一篇草稿正在进行中。请先 /publish 完成或手动删除 draft.md 再开始新的写作。"
@@ -117,21 +123,26 @@ class Writer:
 
     def handle_message(self, text: str) -> str:
         """Route message based on current stage."""
-        stage = self.stage
-        if stage is None:
-            return "当前没有进行中的写作。请用 /write <想法> 开始。"
+        with self._lock:
+            stage = self.stage
+            if stage is None:
+                return "当前没有进行中的写作。请用 /write <想法> 开始。"
 
-        if stage == STAGE_CONCEPT:
-            return self._advance_to_framework(text)
-        elif stage == STAGE_FRAMEWORK:
-            return self._advance_to_content(text)
-        elif stage in (STAGE_CONTENT, STAGE_REVIEW):
-            return self._discuss(text)
-        else:
-            return f"未知状态：{stage}"
+            if stage == STAGE_CONCEPT:
+                return self._advance_to_framework(text)
+            elif stage == STAGE_FRAMEWORK:
+                return self._advance_to_content(text)
+            elif stage in (STAGE_CONTENT, STAGE_REVIEW):
+                return self._discuss(text)
+            else:
+                return f"未知状态：{stage}"
 
     def publish(self) -> str:
         """Finalize: write to 99-publish/, evaluate backfill, delete draft."""
+        with self._lock:
+            return self._publish()
+
+    def _publish(self) -> str:
         logger.info("publishing")
         if not self.active:
             return "当前没有进行中的写作。"
