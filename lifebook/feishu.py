@@ -153,9 +153,10 @@ class FeishuBot:
             threading.Thread(target=self._run_write_cmd, args=(message_id, idea), daemon=True).start()
             return
 
-        # Command: /publish
-        if stripped in ("/publish", "publish"):
-            threading.Thread(target=self._run_publish_cmd, args=(message_id,), daemon=True).start()
+        # Command: /publish (with optional force)
+        if stripped.startswith("/publish") or stripped == "publish":
+            force = stripped in ("/publish!", "/publish --force")
+            threading.Thread(target=self._run_publish_cmd, args=(message_id, force), daemon=True).start()
             return
 
         # Command: /restore
@@ -302,9 +303,9 @@ class FeishuBot:
             reply = f"[LifeBook] 写作启动失败：{e}"
         self.reply_text(message_id, reply)
 
-    def _run_publish_cmd(self, message_id: str) -> None:
+    def _run_publish_cmd(self, message_id: str, force: bool = False) -> None:
         try:
-            reply = self.writer.publish()
+            reply = self.writer.publish(force=force)
         except Exception as e:
             logger.exception("writer.publish failed")
             reply = f"[LifeBook] 发布失败：{e}"

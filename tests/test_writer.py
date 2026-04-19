@@ -266,14 +266,19 @@ class TestPublish:
 
     def test_publish_creates_file_and_deletes_draft(self, tmp_path):
         w, llm, cfg = self._setup_content_stage(tmp_path)
-        # backfill returns nothing
+        # Remove checklist from draft so publish doesn't need force
+        post = w._load_draft()
+        if "## 自检清单" in post.content:
+            idx = post.content.index("## 自检清单")
+            post.content = post.content[:idx].rstrip() + "\n"
+            w._save_draft(post)
+
         llm.structured_call.return_value = {"should_backfill": False, "items": []}
         result = w.publish()
         assert "已发布" in result
         assert not w.draft_path.exists()
         # Check published file exists
         pub_files = list(cfg.knowledge.publish_path.glob("*.md"))
-        # Filter out draft.md and draft.bak.md
         pub_files = [f for f in pub_files if f.name not in ("draft.md", "draft.bak.md")]
         assert len(pub_files) == 1
 
@@ -301,6 +306,12 @@ class TestPublish:
     def test_publish_succeeds_when_backfill_fails(self, tmp_path):
         """Publish should succeed even if backfill LLM call raises an exception."""
         w, llm, cfg = self._setup_content_stage(tmp_path)
+        # Remove checklist so publish doesn't need force
+        post = w._load_draft()
+        if "## 自检清单" in post.content:
+            idx = post.content.index("## 自检清单")
+            post.content = post.content[:idx].rstrip() + "\n"
+            w._save_draft(post)
         # Need a topic so _evaluate_backfill actually calls LLM
         topic_post = new_post("相关内容\n", title="测试主题相关")
         w.store.write_note(cfg.knowledge.topics_path / "related.md", topic_post)
@@ -315,8 +326,32 @@ class TestPublish:
                      if f.name not in ("draft.md", "draft.bak.md")]
         assert len(pub_files) == 1
 
+    def test_publish_blocked_by_checklist(self, tmp_path):
+        """Publish should warn when checklist has items, unless force=True."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+        # Make sure the draft has a checklist
+        post = w._load_draft()
+        post.content += "\n## 自检清单\n\n- 数据来源：2023年\n- 推理：因果推断\n"
+        w._save_draft(post)
 
-# ── 5. Backfill ──────────────────────────────────────────────────────
+        llm.structured_call.return_value = {"should_backfill": False, "items": []}
+        result = w.publish()
+        assert "自检清单" in result
+        assert "强制" in result
+        # Draft should still exist
+        assert w.active
+
+    def test_publish_force_overrides_checklist(self, tmp_path):
+        """publish(force=True) should succeed even with checklist items."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+        post = w._load_draft()
+        post.content += "\n## 自检清单\n\n- 数据来源：2023年\n"
+        w._save_draft(post)
+
+        llm.structured_call.return_value = {"should_backfill": False, "items": []}
+        result = w.publish(force=True)
+        assert "已发布" in result
+        assert not w.draft_path.exists()
 
 
 class TestBackfill:

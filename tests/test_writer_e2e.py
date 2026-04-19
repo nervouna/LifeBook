@@ -179,7 +179,7 @@ class TestFullWritingFlow:
         assert "最终版本" in result
 
         # Step 5: /publish → file in 99-publish/, draft deleted
-        result = w.publish()
+        result = w.publish(force=True)
         assert "已发布" in result
         assert not w.draft_path.exists()
 
@@ -286,7 +286,7 @@ class TestBackfillE2E:
         w.handle_message("确认")
         w.handle_message("选方案1")
 
-        result = w.publish()
+        result = w.publish(force=True)
         assert "已发布" in result
         assert "新建 topic" in result
         assert "新知识点" in result
@@ -322,7 +322,7 @@ class TestBackfillE2E:
         w.handle_message("确认")
         w.handle_message("选方案1")
 
-        result = w.publish()
+        result = w.publish(force=True)
         assert "已发布" in result
         assert "更新 topic" in result
         assert "已有主题" in result

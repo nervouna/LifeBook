@@ -161,6 +161,21 @@ class Writer:
         # Split off self-check list if present
         content_text, checklist = self._split_checklist(body)
 
+        # Warn if checklist has items and force is not set
+        if not force and checklist.strip():
+            checklist_items = [
+                line.strip()
+                for line in checklist.strip().split("\n")
+                if line.strip().startswith("- ")
+            ]
+            if checklist_items:
+                items_text = "\n".join(checklist_items[:5])
+                return (
+                    f"自检清单中还有 {len(checklist_items)} 个未回应的项目：\n"
+                    f"{items_text}\n\n"
+                    f"请先回应清单中的问题，或发送 /publish --force 强制发布。"
+                )
+
         # Build published note
         pub_meta = {
             "title": title,
