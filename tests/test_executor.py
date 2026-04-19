@@ -264,3 +264,69 @@ class TestProcessFile:
         topic_post = read_note(result.topic_path)
         assert topic_post.get("source_trending_source") == "github"
         assert str(topic_post.get("source_star_velocity")) == "50.0"
+
+    def test_invalid_category_rejected(self, executor, mock_config):
+        from lifebook.notes import read_note, write_note
+        path = _write_source(
+            mock_config.knowledge.sources_path, "bad_cat.md",
+            status="inbox",
+        )
+        post = read_note(path)
+        post.content = "Some content"
+        write_note(path, post)
+
+        executor.llm.structured_call.return_value = {
+            "title": "Test",
+            "summary": "summary",
+            "key_points": ["point"],
+            "narrative": "narrative",
+            "tags": ["资讯"],
+            "category": "组织管理",
+            "related_keywords": [],
+            "confidence": 0.9,
+        }
+
+        result = executor.process_file(path)
+        assert result.ok is False
+        assert "invalid category" in result.error
+
+        # Should not create a directory for invalid category
+        assert not (mock_config.knowledge.topics_path / "组织管理").exists()
+
+    def test_existing_categories_filtered_to_valid_only(self, executor, mock_config):
+        from lifebook.notes import read_note, write_note
+        # Create both valid and invalid category directories
+        (mock_config.knowledge.topics_path / "AI技术").mkdir()
+        (mock_config.knowledge.topics_path / "组织管理").mkdir()
+
+        path = _write_source(
+            mock_config.knowledge.sources_path, "filter.md",
+            status="inbox",
+        )
+        post = read_note(path)
+        post.content = "Content"
+        write_note(path, post)
+
+        executor.llm.structured_call.return_value = {
+            "title": "Test",
+            "summary": "summary",
+            "key_points": ["point"],
+            "narrative": "narrative",
+            "tags": ["资讯"],
+            "category": "AI技术",
+            "related_keywords": [],
+            "confidence": 0.9,
+        }
+
+        captured = {}
+        original_call = executor.llm.structured_call
+        def capture_call(**kwargs):
+            captured.update(kwargs)
+            return original_call.return_value
+        executor.llm.structured_call.side_effect = capture_call
+
+        executor.process_file(path)
+
+        prompt = captured["user_prompt"]
+        assert "AI技术" in prompt
+        assert "组织管理" not in prompt

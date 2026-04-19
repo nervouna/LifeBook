@@ -22,6 +22,10 @@ from .store import NoteStore
 
 logger = logging.getLogger(__name__)
 
+VALID_CATEGORIES: set[str] = set(
+    EXTRACT_TOOL_SCHEMA["properties"]["category"]["enum"]
+)
+
 STANDARD_SOURCE_FIELDS = frozenset({
     "status", "source", "source_type", "created", "title",
     "fetch_error", "fetch_at", "fetch_via", "fetched_at",
@@ -98,7 +102,10 @@ class Executor:
         # 2. Ask LLM to extract
         extra_meta = {k: v for k, v in post.metadata.items()
                       if k not in STANDARD_SOURCE_FIELDS}
-        existing_categories = self.store.existing_categories()
+        existing_categories = [
+            c for c in self.store.existing_categories()
+            if c in VALID_CATEGORIES
+        ]
         user_prompt = self._build_extract_prompt(
             title_hint=post.get("title") or "",
             url=url,
@@ -130,11 +137,16 @@ class Executor:
                 skipped_reason=f"low confidence {conf}",
             )
 
-        # 3.5. Sanitize tags
-        extracted["tags"] = sanitize_tags(extracted.get("tags", []))
+        # 3.5. Validate category and sanitize tags
         cat = extracted.get("category", "")
-        if cat:
-            extracted["tags"] = [t for t in extracted["tags"] if t != cat]
+        if cat not in VALID_CATEGORIES:
+            logger.error("invalid category %r for %s", cat, source_path.name)
+            return ProcessResult(
+                source_path, False,
+                error=f"invalid category: {cat}",
+            )
+        extracted["tags"] = sanitize_tags(extracted.get("tags", []))
+        extracted["tags"] = [t for t in extracted["tags"] if t != cat]
 
         # 4. Find related topic notes and inject [[links]]
         related_links = self.store.find_related(extracted.get("related_keywords", []))
