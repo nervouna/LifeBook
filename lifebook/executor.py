@@ -74,9 +74,21 @@ class Executor:
                 skipped_reason=f"already {post.get('status') if post else 'claimed'}",
             )
 
-        # 1. Ensure we have content (fetch URL if needed)
         url = post.get("source") or ""
         content = post.content.strip()
+
+        if url:
+            existing = self.store.find_by_source_url(url)
+            if existing:
+                logger.info("  skip: duplicate source_url -> %s", existing.name)
+                post["status"] = "skipped"
+                post["skip_reason"] = f"duplicate of {existing.name}"
+                write_note(source_path, post)
+                return ProcessResult(
+                    source_path, False,
+                    skipped_reason=f"duplicate source_url: {existing.name}",
+                )
+
         if url and not content:
             fr = self.fetcher.fetch(url)
             if not fr.ok:
@@ -176,6 +188,9 @@ class Executor:
             "confidence": conf,
             "status": "active",
         }
+        alt_cat = extracted.get("alt_category")
+        if alt_cat and alt_cat in VALID_CATEGORIES:
+            topic_meta["alt_category"] = alt_cat
         topic_meta = {k: v for k, v in topic_meta.items() if v is not None}
         for k, v in extra_meta.items():
             topic_meta[f"source_{k}"] = v

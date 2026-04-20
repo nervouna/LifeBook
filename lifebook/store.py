@@ -137,6 +137,15 @@ class NoteStore:
             if d.is_dir() and not d.name.startswith(".")
         ])
 
+    def find_by_source_url(self, url: str) -> Path | None:
+        """Check if a topic note with this source_url already exists."""
+        if not url:
+            return None
+        for path, meta, _title, _content in self._load_topic_cache():
+            if meta.get("source_url") == url:
+                return path
+        return None
+
     def _load_topic_cache(self) -> list[tuple[Path, dict, str, str]]:
         """Load and cache topic notes metadata and content."""
         if self._topic_cache is not None:
