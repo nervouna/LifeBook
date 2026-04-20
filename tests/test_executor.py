@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -53,14 +53,12 @@ def _write_source(sources_dir: Path, filename: str, content: str = "", **meta) -
 
 @pytest.fixture
 def executor(mock_config):
-    """Create an Executor with mocked LLM, Fetcher, and NoteStore."""
-    with patch("lifebook.executor.LLMClient"), patch("lifebook.executor.Fetcher"):
-        from lifebook.store import NoteStore
-        store = NoteStore(mock_config.knowledge)
-        ex = Executor(mock_config, store=store)
-        ex.llm = MagicMock()
-        ex.fetcher = MagicMock()
-        return ex
+    """Create an Executor with mocked LLM, Fetcher, and real NoteStore."""
+    from lifebook.store import NoteStore
+    store = NoteStore(mock_config.knowledge)
+    llm = MagicMock()
+    fetcher = MagicMock()
+    return Executor(mock_config, store=store, llm=llm, fetcher=fetcher)
 
 
 # ---------- scan_inbox ----------

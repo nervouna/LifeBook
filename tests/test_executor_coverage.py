@@ -47,13 +47,11 @@ def _write_source(sources_dir: Path, filename: str, content: str = "", **meta) -
 
 @pytest.fixture
 def executor(mock_config):
-    with patch("lifebook.executor.LLMClient"), patch("lifebook.executor.Fetcher"):
-        from lifebook.store import NoteStore
-        store = NoteStore(mock_config.knowledge)
-        ex = Executor(mock_config, store=store)
-        ex.llm = MagicMock()
-        ex.fetcher = MagicMock()
-        return ex
+    from lifebook.store import NoteStore
+    store = NoteStore(mock_config.knowledge)
+    llm = MagicMock()
+    fetcher = MagicMock()
+    return Executor(mock_config, store=store, llm=llm, fetcher=fetcher)
 
 
 class TestProcessFileEdgeCases:

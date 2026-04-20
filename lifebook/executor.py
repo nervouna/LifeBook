@@ -39,11 +39,17 @@ class ProcessResult:
 
 
 class Executor:
-    def __init__(self, cfg: Config, store: NoteStore | None = None):
+    def __init__(
+        self,
+        cfg: Config,
+        store: NoteStore | None = None,
+        llm: LLMClient | None = None,
+        fetcher: Fetcher | None = None,
+    ):
         self.cfg = cfg
         self.store = store or NoteStore(cfg.knowledge)
-        self.llm = LLMClient(cfg.llm)
-        self.fetcher = Fetcher(cfg.tavily, cfg.fetch)
+        self.llm = llm or LLMClient(cfg.llm)
+        self.fetcher = fetcher or Fetcher(cfg.tavily, cfg.fetch)
         self._valid_categories: set[str] = set(cfg.knowledge.categories)
         self._extract_schema = build_extract_tool_schema(cfg.knowledge.categories)
         self._extract_system = build_extract_system(cfg.knowledge.categories)
@@ -61,55 +67,127 @@ class Executor:
     def process_file(self, source_path: Path) -> ProcessResult:
         """Process a single source file end-to-end."""
         logger.info("process: %s", source_path.name)
-        try:
-            claimed, post = self.store.claim_for_processing(source_path)
-        except Exception as e:
-            return ProcessResult(source_path, False, error=f"read failed: {e}")
-        if not claimed:
-            logger.info("  skip: already %s", post.get("status") if post else "?")
-            return ProcessResult(
-                source_path, False,
-                skipped_reason=f"already {post.get('status') if post else 'claimed'}",
-            )
+
+        # Step 1: claim
+        post, err = self._claim(source_path)
+        if err:
+            return err
 
         url = post.get("source") or ""
         content = post.content.strip()
 
-        if url:
-            existing = self.store.find_by_source_url(url)
-            if existing:
-                logger.info("  skip: duplicate source_url -> %s", existing.name)
-                post["status"] = "skipped"
-                post["skip_reason"] = f"duplicate of {existing.name}"
-                self.store.write_note(source_path, post)
-                return ProcessResult(
-                    source_path, False,
-                    skipped_reason=f"duplicate source_url: {existing.name}",
-                )
+        # Step 2: duplicate check
+        dup_err = self._check_duplicate(url, post, source_path)
+        if dup_err:
+            return dup_err
 
-        if url and not content:
-            fr = self.fetcher.fetch(url)
-            if not fr.ok:
-                post["status"] = fr.status
-                post["fetch_error"] = fr.error or ""
-                post["fetch_at"] = now_iso()
-                self.store.write_note(source_path, post)
-                return ProcessResult(
-                    source_path, False,
-                    skipped_reason=f"{fr.status}: {fr.error}",
-                )
-            content = fr.content
-            post.content = content
-            if fr.title and not post.get("title"):
-                post["title"] = fr.title
-            post["fetch_via"] = fr.via
-            post["fetched_at"] = now_iso()
-            self.store.write_note(source_path, post)
-
+        # Step 3: fetch if needed
+        content, fetch_err = self._fetch_if_needed(url, content, post, source_path)
+        if fetch_err:
+            return fetch_err
         if not content:
             return ProcessResult(source_path, False, error="no content to process")
 
-        # 2. Ask LLM to extract
+        # Step 4: LLM extract
+        extracted, llm_err = self._extract(content, post, source_path)
+        if llm_err:
+            return llm_err
+
+        # Step 5: validate
+        conf = float(extracted.get("confidence", 0))
+        val_err = self._validate(extracted, conf, post, source_path)
+        if val_err:
+            return val_err
+
+        # Step 6: link + compose topic
+        extra_meta = {k: v for k, v in post.metadata.items()
+                      if k not in STANDARD_SOURCE_FIELDS}
+        topic_body = self._compose_topic_body(
+            summary=extracted["summary"],
+            key_points=extracted["key_points"],
+            narrative=self._link_related(extracted),
+            source_url=url,
+        )
+
+        # Step 7: write topic
+        topic_path = self._write_topic(extracted, conf, source_path, url, extra_meta, topic_body)
+
+        # Step 8: update source
+        self._mark_processed(source_path, post, topic_path, extracted)
+
+        logger.info("  -> %s", topic_path.relative_to(self.cfg.knowledge.root))
+        return ProcessResult(source_path, True, topic_path=topic_path)
+
+    def process_inbox(self) -> list[ProcessResult]:
+        files = self.scan_inbox()
+        limit = self.cfg.executor.batch_limit
+        if len(files) > limit:
+            logger.info("inbox has %d, processing first %d", len(files), limit)
+            files = files[:limit]
+        results = []
+        for p in files:
+            results.append(self.process_file(p))
+        return results
+
+    # ---------- pipeline steps ----------
+
+    def _claim(self, source_path: Path) -> tuple[Any, ProcessResult | None]:
+        """Claim file for processing. Returns (post, error_or_none)."""
+        try:
+            claimed, post = self.store.claim_for_processing(source_path)
+        except Exception as e:
+            return None, ProcessResult(source_path, False, error=f"read failed: {e}")
+        if not claimed:
+            logger.info("  skip: already %s", post.get("status") if post else "?")
+            return None, ProcessResult(
+                source_path, False,
+                skipped_reason=f"already {post.get('status') if post else 'claimed'}",
+            )
+        return post, None
+
+    def _check_duplicate(self, url: str, post: Any, source_path: Path) -> ProcessResult | None:
+        """Check for duplicate source_url. Returns error ProcessResult or None."""
+        if not url:
+            return None
+        existing = self.store.find_by_source_url(url)
+        if existing:
+            logger.info("  skip: duplicate source_url -> %s", existing.name)
+            post["status"] = "skipped"
+            post["skip_reason"] = f"duplicate of {existing.name}"
+            self.store.write_note(source_path, post)
+            return ProcessResult(
+                source_path, False,
+                skipped_reason=f"duplicate source_url: {existing.name}",
+            )
+        return None
+
+    def _fetch_if_needed(
+        self, url: str, content: str, post: Any, source_path: Path,
+    ) -> tuple[str, ProcessResult | None]:
+        """Fetch URL content if needed. Returns (content, error_or_none)."""
+        if not url or content:
+            return content, None
+        fr = self.fetcher.fetch(url)
+        if not fr.ok:
+            post["status"] = fr.status
+            post["fetch_error"] = fr.error or ""
+            post["fetch_at"] = now_iso()
+            self.store.write_note(source_path, post)
+            return "", ProcessResult(
+                source_path, False,
+                skipped_reason=f"{fr.status}: {fr.error}",
+            )
+        content = fr.content
+        post.content = content
+        if fr.title and not post.get("title"):
+            post["title"] = fr.title
+        post["fetch_via"] = fr.via
+        post["fetched_at"] = now_iso()
+        self.store.write_note(source_path, post)
+        return content, None
+
+    def _extract(self, content: str, post: Any, source_path: Path) -> tuple[dict, ProcessResult | None]:
+        """Extract structured data via LLM. Returns (extracted, error_or_none)."""
         extra_meta = {k: v for k, v in post.metadata.items()
                       if k not in STANDARD_SOURCE_FIELDS}
         existing_categories = [
@@ -118,7 +196,7 @@ class Executor:
         ]
         user_prompt = self._build_extract_prompt(
             title_hint=post.get("title") or "",
-            url=url,
+            url=post.get("source") or "",
             content=content,
             existing_categories=existing_categories,
             extra_meta=extra_meta,
@@ -133,10 +211,11 @@ class Executor:
             )
         except Exception as e:
             logger.exception("LLM extract failed for %s", source_path)
-            return ProcessResult(source_path, False, error=f"LLM failed: {e}")
+            return {}, ProcessResult(source_path, False, error=f"LLM failed: {e}")
+        return extracted, None
 
-        # 3. Low confidence -> skipped
-        conf = float(extracted.get("confidence", 0))
+    def _validate(self, extracted: dict, conf: float, post: Any, source_path: Path) -> ProcessResult | None:
+        """Validate confidence and category. Returns error ProcessResult or None."""
         if conf < self.cfg.executor.classify_min_confidence:
             post["status"] = "skipped"
             post["skip_reason"] = f"low confidence: {conf}"
@@ -147,7 +226,6 @@ class Executor:
                 skipped_reason=f"low confidence {conf}",
             )
 
-        # 3.5. Validate category and sanitize tags
         cat = extracted.get("category", "")
         if cat not in self._valid_categories:
             logger.error("invalid category %r for %s", cat, source_path.name)
@@ -157,26 +235,26 @@ class Executor:
             )
         extracted["tags"] = sanitize_tags(extracted.get("tags", []))
         extracted["tags"] = [t for t in extracted["tags"] if t != cat]
+        return None
 
-        # 4. Find related topic notes and inject [[links]]
+    def _link_related(self, extracted: dict) -> str:
+        """Find related notes and inject [[links]] into narrative."""
         related_links = self.store.find_related(extracted.get("related_keywords", []))
         narrative = extracted["narrative"]
         if related_links:
             narrative = narrative.rstrip() + "\n\n## 相关笔记\n\n" + "\n".join(
                 f"- [[{wikilink_text(lk)}]]" for lk in related_links
             )
+        return narrative
 
-        # 5. Assemble topic note
-        topic_body = self._compose_topic_body(
-            summary=extracted["summary"],
-            key_points=extracted["key_points"],
-            narrative=narrative,
-            source_url=url,
-        )
-
+    def _write_topic(
+        self, extracted: dict, conf: float, source_path: Path,
+        url: str, extra_meta: dict, topic_body: str,
+    ) -> Path:
+        """Write topic note and return its path."""
         topic_meta = {
             "title": extracted["title"],
-            "created": post.get("created") or now_iso(),
+            "created": extracted.get("created") or now_iso(),
             "processed_at": now_iso(),
             "source_ref": str(source_path.relative_to(self.cfg.knowledge.root)),
             "source_url": url or None,
@@ -202,28 +280,18 @@ class Executor:
         if aliases:
             topic_meta["aliases"] = aliases
         self.store.write_note(topic_path, new_post(topic_body, **topic_meta))
+        return topic_path
 
-        # 6. Update source file
+    def _mark_processed(
+        self, source_path: Path, post: Any, topic_path: Path, extracted: dict,
+    ) -> None:
+        """Update source file status to processed."""
         post["status"] = "processed"
         post["processed_at"] = now_iso()
         post["topic_ref"] = str(topic_path.relative_to(self.cfg.knowledge.root))
         post["tags"] = extracted["tags"]
         post["category"] = extracted["category"]
         self.store.write_note(source_path, post)
-
-        logger.info("  -> %s", topic_path.relative_to(self.cfg.knowledge.root))
-        return ProcessResult(source_path, True, topic_path=topic_path)
-
-    def process_inbox(self) -> list[ProcessResult]:
-        files = self.scan_inbox()
-        limit = self.cfg.executor.batch_limit
-        if len(files) > limit:
-            logger.info("inbox has %d, processing first %d", len(files), limit)
-            files = files[:limit]
-        results = []
-        for p in files:
-            results.append(self.process_file(p))
-        return results
 
     # ---------- helpers ----------
 
