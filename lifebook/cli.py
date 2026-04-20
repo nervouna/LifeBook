@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from pathlib import Path
 
 import click
 
-from .config import load_config
+from .config import load_config, pointer_file, DEFAULT_CONFIG_PATH, resolve_config_path, KnowledgeConfig
 
 
 @click.group()
@@ -23,6 +24,53 @@ def main(ctx: click.Context, config_path: str | None) -> None:
     )
     ctx.ensure_object(dict)
     ctx.obj["config"] = cfg
+
+
+@main.command()
+@click.option("--root", "root_path", type=click.Path(), default=None,
+              help="Knowledge base root directory (default: ~/Documents/Knowledge).")
+@click.pass_context
+def init(ctx: click.Context, root_path: str | None) -> None:
+    """Initialize LifeBook: create pointer file and directory structure."""
+    import shutil
+
+    default_root = Path.home() / "Documents" / "Knowledge"
+    root = Path(root_path) if root_path else default_root
+    root = root.expanduser().resolve()
+
+    # Use KnowledgeConfig defaults to determine directory names
+    cfg = KnowledgeConfig(root=root)
+    kb_dirs = [
+        cfg.sources_path,
+        cfg.topics_path,
+        cfg.trajectories_path,
+        cfg.publish_path,
+        cfg.state_path,
+    ]
+    root.mkdir(parents=True, exist_ok=True)
+    for d in kb_dirs:
+        d.mkdir(exist_ok=True)
+
+    ptr = pointer_file()
+    ptr.parent.mkdir(parents=True, exist_ok=True)
+    ptr.write_text(str(root), encoding="utf-8")
+    click.echo(f"Pointer file written: {ptr}")
+
+    cfg_target = root / ".lifebook" / "config.yaml"
+    if not cfg_target.exists():
+        example = Path(__file__).parent / "config.example.yaml"
+        if example.exists():
+            shutil.copy2(example, cfg_target)
+            click.echo(f"Config copied: {cfg_target}")
+        else:
+            cfg_target.write_text("# LifeBook config\nknowledge:\n  root: {}\n".format(root),
+                                 encoding="utf-8")
+            click.echo(f"Config created: {cfg_target}")
+    else:
+        click.echo(f"Config already exists: {cfg_target}")
+
+    click.echo(f"\nKnowledge base root: {root}")
+    click.echo("Run 'lifebook doctor' to verify.")
 
 
 @main.command()
@@ -216,12 +264,24 @@ def search(ctx: click.Context, query: str, limit: int) -> None:
         click.echo()
 
 
+def _mask(value: str, visible: int = 4) -> str:
+    """Mask a secret, showing only the last few characters."""
+    if not value:
+        return "(empty)"
+    if len(value) <= visible:
+        return "*" * len(value)
+    return "*" * (len(value) - visible) + value[-visible:]
+
+
 @main.command()
 @click.pass_context
 def doctor(ctx: click.Context) -> None:
     """Check configuration and environment."""
     cfg = ctx.obj["config"]
     checks: list[tuple[str, bool, str]] = []
+
+    config_source = resolve_config_path()
+    click.echo(f"  Config:  {config_source}\n")
 
     for name, path in [
         ("Knowledge root", cfg.knowledge.root),
@@ -232,9 +292,9 @@ def doctor(ctx: click.Context) -> None:
     ]:
         checks.append((name, path.exists(), str(path)))
 
-    checks.append(("LLM API key", bool(cfg.llm.api_key), cfg.llm.base_url))
+    checks.append(("LLM API key", bool(cfg.llm.api_key), _mask(cfg.llm.api_key)))
     checks.append(("LLM model", True, f"{cfg.llm.model} (digest: {cfg.llm.digest_model})"))
-    checks.append(("Tavily API key", bool(cfg.tavily.api_key), f"depth={cfg.tavily.extract_depth}"))
+    checks.append(("Tavily API key", bool(cfg.tavily.api_key), _mask(cfg.tavily.api_key)))
     checks.append(("Feishu app_id", bool(cfg.feishu.app_id), cfg.feishu.app_id or "(empty)"))
     checks.append(("Feishu digest chat_id", bool(cfg.feishu.digest_chat_id),
                    cfg.feishu.digest_chat_id or "(empty)"))

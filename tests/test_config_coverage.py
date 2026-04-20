@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from lifebook.config import load_config, KnowledgeConfig
+from lifebook.config import load_config, KnowledgeConfig, resolve_config_path
 
 
 class TestLoadConfig:
@@ -52,3 +52,38 @@ class TestLoadConfig:
         assert cfg.state_path == tmp_path / ".lifebook"
         assert cfg.publish_path == tmp_path / "99-publish"
         assert cfg.trajectories_path == tmp_path / "30-trajectories"
+
+
+class TestDiscoverConfigPath:
+    def test_explicit_takes_priority(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("LIFEBOOK_CONFIG", "/should/not/use/this.yaml")
+        result = resolve_config_path(explicit=tmp_path / "explicit.yaml")
+        assert result == tmp_path / "explicit.yaml"
+
+    def test_env_var_when_no_explicit(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("LIFEBOOK_CONFIG", str(tmp_path / "env.yaml"))
+        result = resolve_config_path()
+        assert result == tmp_path / "env.yaml"
+
+    def test_pointer_file_when_no_env(self, tmp_path: Path, monkeypatch):
+        monkeypatch.delenv("LIFEBOOK_CONFIG", raising=False)
+        kb_root = tmp_path / "my-kb"
+        ptr_dir = tmp_path / "appcfg"
+        ptr_file = ptr_dir / "location"
+        ptr_dir.mkdir()
+        ptr_file.write_text(str(kb_root), encoding="utf-8")
+
+        import lifebook.config
+        monkeypatch.setattr(lifebook.config, "POINTER_FILE", ptr_file)
+        result = resolve_config_path()
+        assert result == kb_root / ".lifebook" / "config.yaml"
+
+    def test_default_when_nothing_set(self, tmp_path: Path, monkeypatch):
+        monkeypatch.delenv("LIFEBOOK_CONFIG", raising=False)
+        nonexistent = tmp_path / "nope" / "location"
+
+        import lifebook.config
+        monkeypatch.setattr(lifebook.config, "POINTER_FILE", nonexistent)
+        result = resolve_config_path()
+        from lifebook.config import DEFAULT_CONFIG_PATH
+        assert result == DEFAULT_CONFIG_PATH

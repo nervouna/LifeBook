@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from platformdirs import user_config_dir
 
 DEFAULT_CONFIG_PATH = Path.home() / "Documents" / "Knowledge" / ".lifebook" / "config.yaml"
+APP_CONFIG_DIR = Path(user_config_dir("lifebook"))
+POINTER_FILE = APP_CONFIG_DIR / "location"
 
 
 DEFAULT_CATEGORIES = [
@@ -129,9 +132,37 @@ def _filter(dc_cls, section):
     return {k: v for k, v in (section or {}).items() if v is not None and k in allowed}
 
 
+def resolve_config_path(explicit: Path | str | None = None) -> Path:
+    """Resolve config file path via: explicit arg → env var → pointer file → default."""
+    if explicit:
+        return Path(explicit)
+    env = os.environ.get("LIFEBOOK_CONFIG")
+    if env:
+        return Path(env)
+    try:
+        kb_root = Path(POINTER_FILE.read_text(encoding="utf-8").strip())
+        return kb_root / ".lifebook" / "config.yaml"
+    except FileNotFoundError:
+        return DEFAULT_CONFIG_PATH
+
+
+
+
+
+
+def app_config_dir() -> Path:
+    """Return the platform-specific app config directory."""
+    return APP_CONFIG_DIR
+
+
+def pointer_file() -> Path:
+    """Return the path to the location pointer file."""
+    return POINTER_FILE
+
+
 def load_config(path: Path | str | None = None) -> Config:
     """Load configuration from YAML file."""
-    cfg_path = Path(path) if path else Path(os.environ.get("LIFEBOOK_CONFIG", DEFAULT_CONFIG_PATH))
+    cfg_path = resolve_config_path(path)
     if not cfg_path.exists():
         raise FileNotFoundError(
             f"Config file not found: {cfg_path}\n"
