@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,26 +9,17 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def mock_chromadb():
-    mock_chromadb = MagicMock()
-    mock_chromadb.config = MagicMock()
-    mock_st = MagicMock()
-    saved = {}
-    mods = {
-        "chromadb": mock_chromadb,
-        "chromadb.config": mock_chromadb.config,
-        "sentence_transformers": mock_st,
-    }
-    for name, mod in mods.items():
-        if name in sys.modules:
-            saved[name] = sys.modules[name]
-        sys.modules[name] = mod
-    yield
-    for name in mods:
-        if name in saved:
-            sys.modules[name] = saved[name]
-        else:
-            sys.modules.pop(name, None)
+def mock_vector_deps():
+    with (
+        patch("lifebook.vector.chromadb") as mock_chromadb,
+        patch("lifebook.vector.SentenceTransformer") as mock_st,
+    ):
+        mock_chromadb.config = MagicMock()
+        mock_client = MagicMock()
+        mock_client.get_or_create_collection.return_value = MagicMock()
+        mock_chromadb.PersistentClient.return_value = mock_client
+        mock_st.return_value = MagicMock()
+        yield
 
 
 @pytest.fixture
