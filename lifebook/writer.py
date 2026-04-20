@@ -11,7 +11,6 @@ from .fetcher import WEB_SEARCH_TOOL, web_search
 from .notes import (
     new_post,
     now_iso,
-    read_note,
     sanitize_tags,
     slugify,
     unique_path,
@@ -497,7 +496,7 @@ class Writer:
         topic_dir = self.cfg.knowledge.topics_path
         stem = slugify(topic_title)
         path = unique_path(topic_dir, stem)
-        write_note(path, post)
+        self.store.write_note(path, post)
         logger.info("backfill_create path=%s", path)
         return path
 
@@ -525,7 +524,7 @@ class Writer:
     DRAFT_BACKUP_NAME = "draft.bak.md"
 
     def _load_draft(self):
-        return read_note(self.draft_path)
+        return self.store.read_note(self.draft_path)
 
     @property
     def _backup_path(self) -> Path:
@@ -535,7 +534,7 @@ class Writer:
         if self.draft_path.exists():
             import shutil
             shutil.copy2(self.draft_path, self._backup_path)
-        write_note(self.draft_path, post)
+        self.store.write_note(self.draft_path, post)
 
     def _delete_draft(self) -> None:
         if self.draft_path.exists():
