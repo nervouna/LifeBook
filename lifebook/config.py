@@ -12,6 +12,18 @@ import yaml
 DEFAULT_CONFIG_PATH = Path.home() / "Documents" / "Knowledge" / ".lifebook" / "config.yaml"
 
 
+DEFAULT_CATEGORIES = [
+    "AI技术",
+    "开发者工具",
+    "半导体",
+    "消费电子",
+    "媒体生态",
+    "组织与劳动",
+    "科技监管",
+    "经济与产业",
+]
+
+
 @dataclass
 class KnowledgeConfig:
     root: Path
@@ -20,6 +32,7 @@ class KnowledgeConfig:
     trajectories_dir: str = "30-trajectories"
     state_dir: str = ".lifebook"
     publish_dir: str = "99-publish"
+    categories: list[str] = field(default_factory=lambda: list(DEFAULT_CATEGORIES))
 
     @property
     def sources_path(self) -> Path:
@@ -135,6 +148,7 @@ def load_config(path: Path | str | None = None) -> Config:
         trajectories_dir=knowledge_raw.get("trajectories_dir", "30-trajectories"),
         state_dir=knowledge_raw.get("state_dir", ".lifebook"),
         publish_dir=knowledge_raw.get("publish_dir", "99-publish"),
+        categories=knowledge_raw.get("categories", list(DEFAULT_CATEGORIES)),
     )
 
     llm = LLMConfig(**_filter(LLMConfig, raw.get("llm")))

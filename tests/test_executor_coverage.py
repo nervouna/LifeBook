@@ -22,6 +22,10 @@ def mock_config(tmp_path):
     cfg.knowledge.sources_path = sources
     cfg.knowledge.topics_path = topics
     cfg.knowledge.state_path = state
+    cfg.knowledge.categories = [
+        "AI技术", "开发者工具", "半导体", "消费电子",
+        "媒体生态", "组织与劳动", "科技监管", "经济与产业",
+    ]
     cfg.executor.classify_min_confidence = 0.5
     cfg.executor.batch_limit = 20
     cfg.llm = MagicMock()

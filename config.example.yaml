@@ -10,6 +10,15 @@ knowledge:
   topics_dir: 20-topics
   trajectories_dir: 30-trajectories
   state_dir: .lifebook
+  categories:
+    - AI技术
+    - 开发者工具
+    - 半导体
+    - 消费电子
+    - 媒体生态
+    - 组织与劳动
+    - 科技监管
+    - 经济与产业
 
 # ============================================================
 # LLM 配置（Anthropic 兼容接口）
