@@ -15,16 +15,11 @@ from .notes import (
     slugify,
     unique_path,
     wikilink_text,
-    write_note,
 )
-from .prompts import EXTRACT_SYSTEM, EXTRACT_TOOL_SCHEMA
+from .prompts import build_extract_system, build_extract_tool_schema
 from .store import NoteStore
 
 logger = logging.getLogger(__name__)
-
-VALID_CATEGORIES: set[str] = set(
-    EXTRACT_TOOL_SCHEMA["properties"]["category"]["enum"]
-)
 
 STANDARD_SOURCE_FIELDS = frozenset({
     "status", "source", "source_type", "created", "title",
@@ -49,6 +44,9 @@ class Executor:
         self.store = store or NoteStore(cfg.knowledge)
         self.llm = LLMClient(cfg.llm)
         self.fetcher = Fetcher(cfg.tavily, cfg.fetch)
+        self._valid_categories: set[str] = set(cfg.knowledge.categories)
+        self._extract_schema = build_extract_tool_schema(cfg.knowledge.categories)
+        self._extract_system = build_extract_system(cfg.knowledge.categories)
 
     # ---------- public API ----------
 
@@ -83,7 +81,7 @@ class Executor:
                 logger.info("  skip: duplicate source_url -> %s", existing.name)
                 post["status"] = "skipped"
                 post["skip_reason"] = f"duplicate of {existing.name}"
-                write_note(source_path, post)
+                self.store.write_note(source_path, post)
                 return ProcessResult(
                     source_path, False,
                     skipped_reason=f"duplicate source_url: {existing.name}",
@@ -95,7 +93,7 @@ class Executor:
                 post["status"] = fr.status
                 post["fetch_error"] = fr.error or ""
                 post["fetch_at"] = now_iso()
-                write_note(source_path, post)
+                self.store.write_note(source_path, post)
                 return ProcessResult(
                     source_path, False,
                     skipped_reason=f"{fr.status}: {fr.error}",
@@ -106,7 +104,7 @@ class Executor:
                 post["title"] = fr.title
             post["fetch_via"] = fr.via
             post["fetched_at"] = now_iso()
-            write_note(source_path, post)
+            self.store.write_note(source_path, post)
 
         if not content:
             return ProcessResult(source_path, False, error="no content to process")
@@ -116,7 +114,7 @@ class Executor:
                       if k not in STANDARD_SOURCE_FIELDS}
         existing_categories = [
             c for c in self.store.existing_categories()
-            if c in VALID_CATEGORIES
+            if c in self._valid_categories
         ]
         user_prompt = self._build_extract_prompt(
             title_hint=post.get("title") or "",
@@ -129,9 +127,9 @@ class Executor:
             extracted = self.llm.structured_call(
                 tool_name="extract_note",
                 tool_description="把一段原始素材加工成结构化的知识笔记。",
-                input_schema=EXTRACT_TOOL_SCHEMA,
+                input_schema=self._extract_schema,
                 user_prompt=user_prompt,
-                system=EXTRACT_SYSTEM,
+                system=self._extract_system,
             )
         except Exception as e:
             logger.exception("LLM extract failed for %s", source_path)
@@ -143,7 +141,7 @@ class Executor:
             post["status"] = "skipped"
             post["skip_reason"] = f"low confidence: {conf}"
             post["llm_draft"] = extracted
-            write_note(source_path, post)
+            self.store.write_note(source_path, post)
             return ProcessResult(
                 source_path, False,
                 skipped_reason=f"low confidence {conf}",
@@ -151,7 +149,7 @@ class Executor:
 
         # 3.5. Validate category and sanitize tags
         cat = extracted.get("category", "")
-        if cat not in VALID_CATEGORIES:
+        if cat not in self._valid_categories:
             logger.error("invalid category %r for %s", cat, source_path.name)
             return ProcessResult(
                 source_path, False,
@@ -189,7 +187,7 @@ class Executor:
             "status": "active",
         }
         alt_cat = extracted.get("alt_category")
-        if alt_cat and alt_cat in VALID_CATEGORIES:
+        if alt_cat and alt_cat in self._valid_categories:
             topic_meta["alt_category"] = alt_cat
         topic_meta = {k: v for k, v in topic_meta.items() if v is not None}
         for k, v in extra_meta.items():
@@ -203,7 +201,7 @@ class Executor:
             aliases.append(extracted["title"])
         if aliases:
             topic_meta["aliases"] = aliases
-        write_note(topic_path, new_post(topic_body, **topic_meta))
+        self.store.write_note(topic_path, new_post(topic_body, **topic_meta))
 
         # 6. Update source file
         post["status"] = "processed"
@@ -211,7 +209,7 @@ class Executor:
         post["topic_ref"] = str(topic_path.relative_to(self.cfg.knowledge.root))
         post["tags"] = extracted["tags"]
         post["category"] = extracted["category"]
-        write_note(source_path, post)
+        self.store.write_note(source_path, post)
 
         logger.info("  -> %s", topic_path.relative_to(self.cfg.knowledge.root))
         return ProcessResult(source_path, True, topic_path=topic_path)
