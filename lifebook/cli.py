@@ -28,8 +28,12 @@ def main(ctx: click.Context, config_path: str | None) -> None:
 @main.command()
 @click.option("--file", "file_path", type=click.Path(exists=True), default=None,
               help="Process a single file instead of scanning inbox.")
+@click.option("--watch", is_flag=True, default=False,
+              help="Poll inbox directory and process new files automatically.")
+@click.option("--interval", type=int, default=30,
+              help="Polling interval in seconds for --watch mode (default: 30).")
 @click.pass_context
-def process(ctx: click.Context, file_path: str | None) -> None:
+def process(ctx: click.Context, file_path: str | None, watch: bool, interval: int) -> None:
     """Process inbox: classify, tag, link, and create topic notes."""
     from .executor import Executor
     cfg = ctx.obj["config"]
@@ -40,13 +44,28 @@ def process(ctx: click.Context, file_path: str | None) -> None:
         _print_result(result)
         sys.exit(0 if result.ok else 1)
 
-    results = executor.process_inbox()
-    ok = sum(1 for r in results if r.ok)
-    skipped = sum(1 for r in results if r.skipped_reason)
-    failed = sum(1 for r in results if not r.ok and not r.skipped_reason)
-    click.echo(f"\nSummary: {len(results)} total | {ok} ok | {skipped} skipped | {failed} failed")
-    for r in results:
-        _print_result(r)
+    def _run_once() -> int:
+        results = executor.process_inbox()
+        ok = sum(1 for r in results if r.ok)
+        skipped = sum(1 for r in results if r.skipped_reason)
+        failed = sum(1 for r in results if not r.ok and not r.skipped_reason)
+        click.echo(f"\nSummary: {len(results)} total | {ok} ok | {skipped} skipped | {failed} failed")
+        for r in results:
+            _print_result(r)
+        return len(results)
+
+    if watch:
+        click.echo(f"Watching inbox every {interval}s. Press Ctrl+C to stop.")
+        _run_once()
+        try:
+            while True:
+                time.sleep(interval)
+                _run_once()
+        except KeyboardInterrupt:
+            click.echo("\nStopped.")
+        return
+
+    _run_once()
 
 
 def _print_result(r) -> None:
