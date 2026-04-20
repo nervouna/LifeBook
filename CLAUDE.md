@@ -43,6 +43,12 @@ Data lives at `~/Documents/Knowledge/`, config at `~/Documents/Knowledge/.lifebo
 - Executor tests mock LLM and Fetcher at the class level; use `executor.llm.structured_call.return_value` for return values.
 - No CI configured — run `python -m pytest` manually before committing.
 
+## Dev Flow
+
+1. TDD: write failing test first, implement to pass, then refactor
+2. Run `/simplify` before each commit
+3. Commit in minimal logical batches
+
 ## Code Style
 
 - Type hints everywhere. `from __future__ import annotations`.
