@@ -1,7 +1,9 @@
 """Writer: interactive writing mode with draft persistence."""
 from __future__ import annotations
 
+import json
 import logging
+import shutil
 import threading
 from pathlib import Path
 
@@ -44,7 +46,13 @@ MAX_HISTORY = 20  # max discussion turns (user+assistant pairs) kept in memory
 
 
 class Writer:
-    """Interactive writing state machine with draft persistence."""
+    """Interactive writing state machine with draft persistence.
+
+    File structure:
+    - draft.json: metadata (stage, concept, frameworks, checklist, etc.)
+    - draft.md: pure article content (no frontmatter)
+    - draft.history.json: discussion history
+    """
 
     DRAFT_NAME = "draft.md"
 
@@ -53,7 +61,8 @@ class Writer:
         self.llm = llm
         self.store = store or NoteStore(cfg.knowledge)
         self.draft_path = cfg.knowledge.publish_path / self.DRAFT_NAME
-        # In-memory discussion history (lost on restart; that's fine)
+        self.draft_meta_path = cfg.knowledge.publish_path / "draft.json"
+        self.history_path = cfg.knowledge.publish_path / "draft.history.json"
         self._history: list[dict[str, str]] = []
         self._lock = threading.Lock()
 
@@ -62,14 +71,14 @@ class Writer:
     @property
     def active(self) -> bool:
         """Is there an active draft?"""
-        return self.draft_path.exists()
+        return self.draft_meta_path.exists()
 
     @property
     def stage(self) -> str | None:
         if not self.active:
             return None
-        post = self._load_draft()
-        return post.get("stage")
+        meta, _ = self._load_draft()
+        return meta.get("stage") if meta else None
 
     def start(self, idea: str) -> str:
         """Begin a new writing session. Returns concept for user review."""
@@ -97,22 +106,24 @@ class Writer:
             system=CONCEPT_SYSTEM,
         )
 
-        # Create draft
-        concept_text = (
-            f"**主题**：{result['topic']}\n\n"
-            f"**核心主张**：{result['thesis']}\n\n"
-            f"**预期读者**：{result['audience']}\n\n"
-            f"{result['concept_text']}"
-        )
-        post = new_post(
-            f"## 核心概念\n\n{concept_text}\n",
-            title=result["topic"],
-            stage=STAGE_CONCEPT,
-            created=now_iso(),
-            updated=now_iso(),
-        )
-        self._save_draft(post)
+        # Create draft metadata
+        meta = {
+            "stage": STAGE_CONCEPT,
+            "title": result["topic"],
+            "created": now_iso(),
+            "updated": now_iso(),
+            "concept": {
+                "topic": result["topic"],
+                "thesis": result["thesis"],
+                "audience": result["audience"],
+                "concept_text": result["concept_text"],
+            },
+        }
+        self._save_draft(meta, "")
         self._history.clear()
+        # Also clear history file
+        if self.history_path.exists():
+            self.history_path.unlink()
 
         return (
             f"核心概念草案：\n\n"
@@ -521,33 +532,50 @@ class Writer:
 
     # --------------- helpers ---------------
 
-    DRAFT_BACKUP_NAME = "draft.bak.md"
+    def _load_draft(self) -> tuple[dict | None, str]:
+        """Load draft from draft.json and draft.md.
 
-    def _load_draft(self):
-        return self.store.read_note(self.draft_path)
-
-    @property
-    def _backup_path(self) -> Path:
-        return self.draft_path.with_suffix(".bak.md")
-
-    def _save_draft(self, post) -> None:
+        Returns (meta_dict, content_string). Returns (None, "") if no draft exists.
+        """
+        if not self.draft_meta_path.exists():
+            return None, ""
+        with self.draft_meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+        content = ""
         if self.draft_path.exists():
-            import shutil
-            shutil.copy2(self.draft_path, self._backup_path)
-        self.store.write_note(self.draft_path, post)
+            content = self.draft_path.read_text(encoding="utf-8")
+        return meta, content
+
+    def _save_draft(self, meta: dict, content: str) -> None:
+        """Save draft to draft.json and draft.md.
+
+        Creates backup of both files before overwriting.
+        """
+        if self.draft_meta_path.exists():
+            shutil.copy2(self.draft_meta_path, self.draft_meta_path.with_suffix(".json.bak"))
+        if self.draft_path.exists():
+            shutil.copy2(self.draft_path, self.draft_path.with_suffix(".md.bak"))
+
+        self.draft_meta_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.draft_meta_path.open("w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        self.draft_path.write_text(content, encoding="utf-8")
 
     def _delete_draft(self) -> None:
-        if self.draft_path.exists():
-            self.draft_path.unlink()
+        """Delete all draft files (json, md, history)."""
+        for p in [self.draft_meta_path, self.draft_path, self.history_path]:
+            p.unlink(missing_ok=True)
 
     def restore_draft(self) -> str:
         """Restore draft from backup. Returns status message."""
         with self._lock:
-            bak = self._backup_path
-            if not bak.exists():
+            bak_meta = self.draft_meta_path.with_suffix(".json.bak")
+            if not bak_meta.exists():
                 return "没有可恢复的备份。"
-            import shutil
-            shutil.copy2(bak, self.draft_path)
+            shutil.copy2(bak_meta, self.draft_meta_path)
+            bak_md = self.draft_path.with_suffix(".md.bak")
+            if bak_md.exists():
+                shutil.copy2(bak_md, self.draft_path)
             stage = self.stage or "unknown"
             logger.info("draft restored from backup, stage=%s", stage)
             return f"已恢复到上一版本（阶段：{stage}）"

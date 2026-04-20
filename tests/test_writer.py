@@ -110,7 +110,164 @@ BACKFILL_RESULT = {
 }
 
 
-# ── 1. Static helpers ────────────────────────────────────────────────
+# ── 0. New file I/O structure ────────────────────────────────────────────
+
+
+class TestNewFileIO:
+    """Tests for draft.json + draft.md file structure."""
+
+    def test_save_draft_writes_json_and_md(self, tmp_path):
+        """_save_draft should write metadata to draft.json and content to draft.md."""
+        w, llm, cfg = make_writer(tmp_path)
+        meta = {
+            "stage": STAGE_CONCEPT,
+            "title": "测试标题",
+            "concept": {
+                "topic": "主题",
+                "thesis": "主张",
+                "audience": "读者",
+            },
+        }
+        content = "这是文章内容。\n\n第二段落。"
+
+        w._save_draft(meta, content)
+
+        # Check draft.json exists and has correct metadata
+        assert w.draft_meta_path.exists()
+        import json
+        with w.draft_meta_path.open("r", encoding="utf-8") as f:
+            saved_meta = json.load(f)
+        assert saved_meta["stage"] == STAGE_CONCEPT
+        assert saved_meta["concept"]["topic"] == "主题"
+
+        # Check draft.md exists and has pure content (no frontmatter)
+        assert w.draft_path.exists()
+        md_content = w.draft_path.read_text(encoding="utf-8")
+        assert md_content == content
+        assert "---" not in md_content  # No frontmatter
+
+    def test_load_draft_reads_json_and_md(self, tmp_path):
+        """_load_draft should return (meta, content) from separate files."""
+        w, llm, cfg = make_writer(tmp_path)
+
+        # Write files manually
+        import json
+        meta = {"stage": STAGE_FRAMEWORK, "title": "测试"}
+        with w.draft_meta_path.open("w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        w.draft_path.write_text("文章内容\n", encoding="utf-8")
+
+        loaded_meta, loaded_content = w._load_draft()
+
+        assert loaded_meta["stage"] == STAGE_FRAMEWORK
+        assert loaded_content == "文章内容\n"
+
+    def test_load_draft_no_files_returns_none(self, tmp_path):
+        """_load_draft should return (None, "") when no draft exists."""
+        w, llm, cfg = make_writer(tmp_path)
+        meta, content = w._load_draft()
+        assert meta is None
+        assert content == ""
+
+    def test_delete_draft_removes_all_files(self, tmp_path):
+        """_delete_draft should remove draft.json, draft.md, and history.json."""
+        w, llm, cfg = make_writer(tmp_path)
+
+        # Create all three files
+        import json
+        with w.draft_meta_path.open("w", encoding="utf-8") as f:
+            json.dump({"stage": STAGE_CONTENT}, f)
+        w.draft_path.write_text("内容", encoding="utf-8")
+        with w.history_path.open("w", encoding="utf-8") as f:
+            json.dump([], f)
+
+        w._delete_draft()
+
+        assert not w.draft_meta_path.exists()
+        assert not w.draft_path.exists()
+        assert not w.history_path.exists()
+
+    def test_active_checks_json_exists(self, tmp_path):
+        """active property should check draft.json existence."""
+        w, llm, cfg = make_writer(tmp_path)
+        assert not w.active
+
+        import json
+        with w.draft_meta_path.open("w", encoding="utf-8") as f:
+            json.dump({"stage": STAGE_CONCEPT}, f)
+
+        assert w.active
+
+    def test_stage_reads_from_json(self, tmp_path):
+        """stage property should read from draft.json."""
+        w, llm, cfg = make_writer(tmp_path)
+        assert w.stage is None
+
+        import json
+        with w.draft_meta_path.open("w", encoding="utf-8") as f:
+            json.dump({"stage": STAGE_FRAMEWORK}, f)
+
+        assert w.stage == STAGE_FRAMEWORK
+
+
+class TestStartNewStructure:
+    """Tests for start() with draft.json + draft.md structure."""
+
+    def test_start_saves_concept_to_json(self, tmp_path):
+        """start() should save concept as structured data to draft.json."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+
+        w.start("我想写关于测试的文章")
+
+        import json
+        with w.draft_meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        assert meta["stage"] == STAGE_CONCEPT
+        assert meta["concept"]["topic"] == "测试主题"
+        assert meta["concept"]["thesis"] == "测试主张"
+        assert meta["concept"]["audience"] == "测试读者"
+
+    def test_start_writes_empty_md(self, tmp_path):
+        """start() should write empty draft.md."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+
+        w.start("我想写关于测试的文章")
+
+        content = w.draft_path.read_text(encoding="utf-8")
+        assert content == ""
+
+    def test_start_clears_history(self, tmp_path):
+        """start() should clear history file."""
+        w, llm, cfg = make_writer(tmp_path)
+        # Create existing history
+        import json
+        with w.history_path.open("w", encoding="utf-8") as f:
+            json.dump([{"role": "user", "content": "old"}], f)
+
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("新文章")
+
+        assert not w.history_path.exists() or w.history_path.read_text() == "[]"
+
+    def test_start_includes_created_updated(self, tmp_path):
+        """start() should include created/updated timestamps."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+
+        w.start("文章")
+
+        import json
+        with w.draft_meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        assert "created" in meta
+        assert "updated" in meta
+
+
+# ── 1. Static helpers (to be removed) ────────────────────────────────────────
 
 
 class TestExtractSection:
