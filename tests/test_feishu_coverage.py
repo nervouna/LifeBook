@@ -17,9 +17,8 @@ def _make_bot():
     bot.store = MagicMock()
     bot.executor = MagicMock()
     bot.writer = MagicMock()
-    bot.api = MagicMock()
-    bot.reply_text = MagicMock(return_value="mid")
-    bot._ws_client = None
+    bot.transport = MagicMock()
+    bot.transport.reply_text = MagicMock(return_value="mid")
     bot.indexer = None
     return bot
 
@@ -78,67 +77,77 @@ class TestStripMentions:
 
 class TestSendReplyText:
     def test_send_text_success(self):
-        from lifebook.feishu import FeishuBot
-        bot = _make_bot()
-        mock_resp = MagicMock()
-        mock_resp.success.return_value = True
-        mock_resp.data.message_id = "mid123"
-        bot.api.im.v1.message.create.return_value = mock_resp
-        # Restore real send_text (not the mock from _make_bot)
-        bot.send_text = FeishuBot.send_text.__get__(bot, type(bot))
-        with patch("lifebook.feishu.CreateMessageRequestBody") as MockBody:
-            with patch("lifebook.feishu.CreateMessageRequest") as MockReq:
-                MockBody.builder.return_value.receive_id.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
-                MockReq.builder.return_value.receive_id_type.return_value.request_body.return_value.build.return_value = MagicMock()
-                result = bot.send_text("chat1", "hello")
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client") as MockClient:
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = True
+            mock_resp.data.message_id = "mid123"
+            transport.api.im.v1.message.create.return_value = mock_resp
+            with patch("lifebook.feishu_transport.CreateMessageRequestBody") as MockBody:
+                with patch("lifebook.feishu_transport.CreateMessageRequest") as MockReq:
+                    MockBody.builder.return_value.receive_id.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
+                    MockReq.builder.return_value.receive_id_type.return_value.request_body.return_value.build.return_value = MagicMock()
+                    result = transport.send_text("chat1", "hello")
         assert result == "mid123"
 
     def test_send_text_failure(self):
-        from lifebook.feishu import FeishuBot
-        bot = _make_bot()
-        mock_resp = MagicMock()
-        mock_resp.success.return_value = False
-        mock_resp.code = 500
-        mock_resp.msg = "error"
-        bot.api.im.v1.message.create.return_value = mock_resp
-        bot.send_text = FeishuBot.send_text.__get__(bot, type(bot))
-        with patch("lifebook.feishu.CreateMessageRequestBody") as MockBody:
-            with patch("lifebook.feishu.CreateMessageRequest") as MockReq:
-                MockBody.builder.return_value.receive_id.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
-                MockReq.builder.return_value.receive_id_type.return_value.request_body.return_value.build.return_value = MagicMock()
-                result = bot.send_text("chat1", "hello")
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client") as MockClient:
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = False
+            mock_resp.code = 500
+            mock_resp.msg = "error"
+            transport.api.im.v1.message.create.return_value = mock_resp
+            with patch("lifebook.feishu_transport.CreateMessageRequestBody") as MockBody:
+                with patch("lifebook.feishu_transport.CreateMessageRequest") as MockReq:
+                    MockBody.builder.return_value.receive_id.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
+                    MockReq.builder.return_value.receive_id_type.return_value.request_body.return_value.build.return_value = MagicMock()
+                    result = transport.send_text("chat1", "hello")
         assert result is None
 
     def test_reply_text_success(self):
-        from lifebook.feishu import FeishuBot
-        bot = _make_bot()
-        # Restore real reply_text
-        bot.reply_text = FeishuBot.reply_text.__get__(bot, type(bot))
-        mock_resp = MagicMock()
-        mock_resp.success.return_value = True
-        mock_resp.data.message_id = "reply123"
-        bot.api.im.v1.message.reply.return_value = mock_resp
-        with patch("lifebook.feishu.ReplyMessageRequestBody") as MockBody:
-            with patch("lifebook.feishu.ReplyMessageRequest") as MockReq:
-                MockBody.builder.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
-                MockReq.builder.return_value.message_id.return_value.request_body.return_value.build.return_value = MagicMock()
-                result = bot.reply_text("msg1", "hello")
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client") as MockClient:
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = True
+            mock_resp.data.message_id = "reply123"
+            transport.api.im.v1.message.reply.return_value = mock_resp
+            with patch("lifebook.feishu_transport.ReplyMessageRequestBody") as MockBody:
+                with patch("lifebook.feishu_transport.ReplyMessageRequest") as MockReq:
+                    MockBody.builder.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
+                    MockReq.builder.return_value.message_id.return_value.request_body.return_value.build.return_value = MagicMock()
+                    result = transport.reply_text("msg1", "hello")
         assert result == "reply123"
 
     def test_reply_text_failure(self):
-        from lifebook.feishu import FeishuBot
-        bot = _make_bot()
-        bot.reply_text = FeishuBot.reply_text.__get__(bot, type(bot))
-        mock_resp = MagicMock()
-        mock_resp.success.return_value = False
-        mock_resp.code = 500
-        mock_resp.msg = "error"
-        bot.api.im.v1.message.reply.return_value = mock_resp
-        with patch("lifebook.feishu.ReplyMessageRequestBody") as MockBody:
-            with patch("lifebook.feishu.ReplyMessageRequest") as MockReq:
-                MockBody.builder.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
-                MockReq.builder.return_value.message_id.return_value.request_body.return_value.build.return_value = MagicMock()
-                result = bot.reply_text("msg1", "hello")
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client") as MockClient:
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = False
+            mock_resp.code = 500
+            mock_resp.msg = "error"
+            transport.api.im.v1.message.reply.return_value = mock_resp
+            with patch("lifebook.feishu_transport.ReplyMessageRequestBody") as MockBody:
+                with patch("lifebook.feishu_transport.ReplyMessageRequest") as MockReq:
+                    MockBody.builder.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
+                    MockReq.builder.return_value.message_id.return_value.request_body.return_value.build.return_value = MagicMock()
+                    result = transport.reply_text("msg1", "hello")
         assert result is None
 
     def test_empty_text_after_strip(self):
@@ -147,7 +156,7 @@ class TestSendReplyText:
         evt.event.message.mentions = [SimpleNamespace(key="@bot")]
         bot._handle_message(evt)
         # Should not reply since text is empty after stripping mention
-        bot.reply_text.assert_not_called()
+        bot.transport.reply_text.assert_not_called()
 
 
 class TestNonTextMessage:
@@ -155,16 +164,16 @@ class TestNonTextMessage:
         bot = _make_bot()
         evt = _make_event("img", msg_type="image")
         bot._handle_message(evt)
-        bot.reply_text.assert_called_once()
-        assert "暂不支持" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called_once()
+        assert "暂不支持" in bot.transport.reply_text.call_args[0][1]
 
 
 class TestSlashCommands:
     def test_write_empty_shows_hint(self):
         bot = _make_bot()
         bot._handle_message(_make_event("/write"))
-        bot.reply_text.assert_called_once()
-        assert "请提供写作想法" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called_once()
+        assert "请提供写作想法" in bot.transport.reply_text.call_args[0][1]
 
     def test_write_with_idea_starts_thread(self):
         bot = _make_bot()
@@ -205,8 +214,8 @@ class TestSlashCommands:
     def test_search_empty_shows_hint(self):
         bot = _make_bot()
         bot._handle_message(_make_event("/search"))
-        bot.reply_text.assert_called_once()
-        assert "请提供搜索词" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called_once()
+        assert "请提供搜索词" in bot.transport.reply_text.call_args[0][1]
 
     def test_search_with_query_starts_thread(self):
         bot = _make_bot()
@@ -230,8 +239,8 @@ class TestUrlAndTextMessages:
         bot.writer.active = False
         with patch("lifebook.feishu.ingest_url", side_effect=Exception("fail")):
             bot._handle_message(_make_event("check https://example.com"))
-        bot.reply_text.assert_called()
-        assert "录入失败" in str(bot.reply_text.call_args)
+        bot.transport.reply_text.assert_called()
+        assert "录入失败" in str(bot.transport.reply_text.call_args)
 
     def test_multiple_urls(self):
         bot = _make_bot()
@@ -256,8 +265,8 @@ class TestUrlAndTextMessages:
         bot.writer.active = False
         with patch("lifebook.feishu.ingest_text", side_effect=Exception("fail")):
             bot._handle_message(_make_event("just a note"))
-        bot.reply_text.assert_called()
-        assert "录入失败" in str(bot.reply_text.call_args)
+        bot.transport.reply_text.assert_called()
+        assert "录入失败" in str(bot.transport.reply_text.call_args)
 
     def test_writing_mode_routes_to_writer(self):
         bot = _make_bot()
@@ -276,14 +285,14 @@ class TestProcessAndReply:
         )
         bot.cfg.knowledge.root = Path("/fake")
         bot._process_and_reply("msg123", [Path("/fake/test.md")])
-        bot.reply_text.assert_called()
+        bot.transport.reply_text.assert_called()
 
     def test_process_and_reply_exception(self):
         bot = _make_bot()
         bot.executor.process_file.side_effect = Exception("crash")
         bot._process_and_reply("msg123", [Path("/fake/test.md")])
-        bot.reply_text.assert_called()
-        assert "失败" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called()
+        assert "失败" in bot.transport.reply_text.call_args[0][1]
 
 
 class TestFormatResults:
@@ -312,36 +321,36 @@ class TestRunCommands:
         bot = _make_bot()
         bot.writer.start.side_effect = Exception("crash")
         bot._run_write_cmd("msg123", "idea")
-        bot.reply_text.assert_called()
-        assert "写作启动失败" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called()
+        assert "写作启动失败" in bot.transport.reply_text.call_args[0][1]
 
     def test_run_publish_cmd_exception(self):
         bot = _make_bot()
         bot.writer.publish.side_effect = Exception("crash")
         bot._run_publish_cmd("msg123")
-        bot.reply_text.assert_called()
-        assert "发布失败" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called()
+        assert "发布失败" in bot.transport.reply_text.call_args[0][1]
 
     def test_run_writer_msg_exception(self):
         bot = _make_bot()
         bot.writer.handle_message.side_effect = Exception("crash")
         bot._run_writer_msg("msg123", "text")
-        bot.reply_text.assert_called()
-        assert "写作处理失败" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called()
+        assert "写作处理失败" in bot.transport.reply_text.call_args[0][1]
 
     def test_run_restore_cmd_exception(self):
         bot = _make_bot()
         bot.writer.restore_draft.side_effect = Exception("crash")
         bot._run_restore_cmd("msg123")
-        bot.reply_text.assert_called()
-        assert "恢复失败" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called()
+        assert "恢复失败" in bot.transport.reply_text.call_args[0][1]
 
     def test_run_process_cmd_empty(self):
         bot = _make_bot()
         bot.executor.process_inbox.return_value = []
         bot._run_process_cmd("msg123")
-        bot.reply_text.assert_called()
-        assert "为空" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called()
+        assert "为空" in bot.transport.reply_text.call_args[0][1]
 
     def test_run_process_cmd_with_results(self):
         bot = _make_bot()
@@ -351,7 +360,7 @@ class TestRunCommands:
         ]
         bot.cfg.knowledge.root = Path("/fake")
         bot._run_process_cmd("msg123")
-        bot.reply_text.assert_called()
+        bot.transport.reply_text.assert_called()
 
     def test_run_update_index_success(self):
         bot = _make_bot()
@@ -370,8 +379,8 @@ class TestRunCommands:
                 importlib.reload(lifebook.feishu)
                 bot2 = _make_bot()
                 bot2._run_update_index_cmd("msg123")
-        bot2.reply_text.assert_called()
-        reply = bot2.reply_text.call_args[0][1]
+        bot2.transport.reply_text.assert_called()
+        reply = bot2.transport.reply_text.call_args[0][1]
         assert "向量索引更新完成" in reply
 
     def test_run_update_index_exception(self):
@@ -386,8 +395,8 @@ class TestRunCommands:
                 importlib.reload(lifebook.feishu)
                 bot2 = _make_bot()
                 bot2._run_update_index_cmd("msg123")
-        bot2.reply_text.assert_called()
-        assert "索引更新失败" in bot2.reply_text.call_args[0][1]
+        bot2.transport.reply_text.assert_called()
+        assert "索引更新失败" in bot2.transport.reply_text.call_args[0][1]
 
     def test_run_search_cmd_no_results(self):
         bot = _make_bot()
@@ -403,8 +412,8 @@ class TestRunCommands:
                 importlib.reload(lifebook.feishu)
                 bot2 = _make_bot()
                 bot2._run_search_cmd("msg123", "query")
-        bot2.reply_text.assert_called()
-        assert "未找到" in bot2.reply_text.call_args[0][1]
+        bot2.transport.reply_text.assert_called()
+        assert "未找到" in bot2.transport.reply_text.call_args[0][1]
 
     def test_run_search_cmd_with_results(self):
         bot = _make_bot()
@@ -422,8 +431,8 @@ class TestRunCommands:
                 importlib.reload(lifebook.feishu)
                 bot2 = _make_bot()
                 bot2._run_search_cmd("msg123", "query")
-        bot2.reply_text.assert_called()
-        reply = bot2.reply_text.call_args[0][1]
+        bot2.transport.reply_text.assert_called()
+        reply = bot2.transport.reply_text.call_args[0][1]
         assert "Test" in reply
 
     def test_run_search_cmd_exception(self):
@@ -438,15 +447,13 @@ class TestRunCommands:
                 importlib.reload(lifebook.feishu)
                 bot2 = _make_bot()
                 bot2._run_search_cmd("msg123", "query")
-        bot2.reply_text.assert_called()
-        assert "搜索失败" in bot2.reply_text.call_args[0][1]
+        bot2.transport.reply_text.assert_called()
+        assert "搜索失败" in bot2.transport.reply_text.call_args[0][1]
 
 
 class TestLifecycle:
-    def test_start_creates_ws_client(self):
+    def test_start_delegates_to_transport(self):
         bot = _make_bot()
-        bot.cfg.feishu.app_id = "app"
-        bot.cfg.feishu.app_secret = "secret"
         mock_indexer_inst = MagicMock()
         mock_indexer_inst.start = MagicMock()
         with patch.dict(sys.modules, {
@@ -458,18 +465,12 @@ class TestLifecycle:
                 import lifebook.feishu
                 importlib.reload(lifebook.feishu)
                 bot2 = _make_bot()
-                bot2.cfg.feishu.app_id = "app"
-                bot2.cfg.feishu.app_secret = "secret"
-                with patch("lifebook.feishu.lark.EventDispatcherHandler"):
-                    with patch("lifebook.feishu.lark.ws.Client") as MockWS:
-                        bot2.start()
-        MockWS.assert_called_once()
+                bot2.start()
         mock_indexer_inst.start.assert_called_once()
+        bot2.transport.start.assert_called_once_with(bot2._handle_message)
 
     def test_start_indexer_fails(self):
         bot = _make_bot()
-        bot.cfg.feishu.app_id = "app"
-        bot.cfg.feishu.app_secret = "secret"
         with patch.dict(sys.modules, {
             "chromadb": MagicMock(), "chromadb.config": MagicMock(),
             "sentence_transformers": MagicMock(),
@@ -479,26 +480,19 @@ class TestLifecycle:
                 import lifebook.feishu
                 importlib.reload(lifebook.feishu)
                 bot2 = _make_bot()
-                bot2.cfg.feishu.app_id = "app"
-                bot2.cfg.feishu.app_secret = "secret"
-                with patch("lifebook.feishu.lark.EventDispatcherHandler"):
-                    with patch("lifebook.feishu.lark.ws.Client"):
-                        bot2.start()
+                bot2.start()
         assert bot2.indexer is None
+        bot2.transport.start.assert_called_once()
 
     def test_stop(self):
         bot = _make_bot()
         mock_indexer = MagicMock()
         bot.indexer = mock_indexer
-        mock_ws = MagicMock()
-        bot._ws_client = mock_ws
         bot.stop()
         mock_indexer.stop.assert_called_once()
-        mock_ws.close.assert_called_once()
+        bot.transport.stop.assert_called_once()
 
     def test_stop_no_indexer(self):
         bot = _make_bot()
-        mock_ws = MagicMock()
-        bot._ws_client = mock_ws
         bot.stop()
-        mock_ws.close.assert_called_once()
+        bot.transport.stop.assert_called_once()

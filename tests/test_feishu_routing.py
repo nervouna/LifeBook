@@ -15,10 +15,9 @@ def _make_bot():
     bot.cfg = MagicMock()
     bot.executor = MagicMock()
     bot.writer = MagicMock()
-    bot.api = MagicMock()
+    bot.transport = MagicMock()
+    bot.transport.reply_text = MagicMock(return_value="mid")
     bot.store = MagicMock()
-    bot.reply_text = MagicMock(return_value="mid")
-    bot._ws_client = None
     return bot
 
 
@@ -44,13 +43,13 @@ class TestWriteCommand:
         bot.writer.start.return_value = "outline here"
         bot._run_write_cmd("msg123", "AI文章")
         bot.writer.start.assert_called_once_with("AI文章")
-        bot.reply_text.assert_called_once_with("msg123", "outline here")
+        bot.transport.reply_text.assert_called_once_with("msg123", "outline here")
 
     def test_write_without_idea_replies_usage(self):
         bot = _make_bot()
         bot._handle_message(_make_event("/write"))
-        bot.reply_text.assert_called_once()
-        assert "请提供写作想法" in bot.reply_text.call_args[0][1]
+        bot.transport.reply_text.assert_called_once()
+        assert "请提供写作想法" in bot.transport.reply_text.call_args[0][1]
         bot.writer.start.assert_not_called()
 
     def test_write_with_idea_routes_thread(self):
@@ -69,7 +68,7 @@ class TestPublishCommand:
         bot.writer.publish.return_value = "published!"
         bot._run_publish_cmd("msg123")
         bot.writer.publish.assert_called_once()
-        bot.reply_text.assert_called_once_with("msg123", "published!")
+        bot.transport.reply_text.assert_called_once_with("msg123", "published!")
 
     def test_publish_routes_thread(self):
         bot = _make_bot()
@@ -84,7 +83,7 @@ class TestWriterActiveRouting:
         bot.writer.handle_message.return_value = "writer reply"
         bot._run_writer_msg("msg123", "hello")
         bot.writer.handle_message.assert_called_once_with("hello")
-        bot.reply_text.assert_called_once_with("msg123", "writer reply")
+        bot.transport.reply_text.assert_called_once_with("msg123", "writer reply")
 
     def test_active_writer_routing_in_handle_message(self):
         bot = _make_bot()
@@ -112,7 +111,7 @@ class TestStatusCommand:
         bot.cfg.knowledge.topics_path.rglob.return_value = []
         # Call _reply_status directly since /status is intercepted by writer.active
         bot._reply_status("msg123")
-        reply = bot.reply_text.call_args[0][1]
+        reply = bot.transport.reply_text.call_args[0][1]
         assert "进行中" in reply
         assert "drafting" in reply
 
@@ -123,7 +122,7 @@ class TestStatusCommand:
         bot.cfg.knowledge.topics_path.exists.return_value = True
         bot.cfg.knowledge.topics_path.rglob.return_value = []
         bot._handle_message(_make_event("/status"))
-        reply = bot.reply_text.call_args[0][1]
+        reply = bot.transport.reply_text.call_args[0][1]
         assert "未启动" in reply
 
 
@@ -131,9 +130,9 @@ class TestEdgeCases:
     def test_bot_sender_ignored(self):
         bot = _make_bot()
         bot._handle_message(_make_event("hello", sender_type="bot"))
-        bot.reply_text.assert_not_called()
+        bot.transport.reply_text.assert_not_called()
 
     def test_non_text_message_rejected(self):
         bot = _make_bot()
         bot._handle_message(_make_event("hello", msg_type="image"))
-        assert "暂不支持" in bot.reply_text.call_args[0][1]
+        assert "暂不支持" in bot.transport.reply_text.call_args[0][1]
