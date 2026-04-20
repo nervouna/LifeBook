@@ -422,91 +422,6 @@ class TestDiscussNewStructure:
         assert content == "新的正文内容。"
 
 
-# ── 1. Static helpers (to be removed) ────────────────────────────────────────
-
-
-class TestExtractSection:
-    body = (
-        "## 核心概念\n\n概念内容\n\n## 框架\n\n框架内容\n\n## 正文\n\n正文内容\n"
-    )
-
-    def test_extract_without_keep_header(self):
-        result = Writer._extract_section(self.body, "核心概念")
-        assert "概念内容" in result
-        assert "## 核心概念" not in result
-
-    def test_extract_with_keep_header(self):
-        result = Writer._extract_section(self.body, "核心概念", keep_header=True)
-        assert result.startswith("## 核心概念")
-        assert "概念内容" in result
-        # Should NOT include next section
-        assert "框架内容" not in result
-
-    def test_missing_heading(self):
-        assert Writer._extract_section(self.body, "不存在") == ""
-
-    def test_last_section(self):
-        result = Writer._extract_section(self.body, "正文")
-        assert "正文内容" in result
-
-    def test_multiple_sections_isolation(self):
-        r1 = Writer._extract_section(self.body, "框架")
-        assert "框架内容" in r1
-        assert "概念内容" not in r1
-        assert "正文内容" not in r1
-
-    def test_heading_inside_code_block_ignored(self):
-        """Headings inside fenced code blocks should not break extraction."""
-        body = (
-            "## 正文\n\n"
-            "一些文字。\n\n"
-            "```\n"
-            "## 这不是标题\n"
-            "```\n\n"
-            "更多正文内容。\n"
-        )
-        result = Writer._extract_section(body, "正文")
-        assert "一些文字" in result
-        assert "更多正文内容" in result
-        # Should not stop at the fake heading inside code block
-        assert "这不是标题" in result
-
-    def test_subheadings_preserved(self):
-        """### subheadings under a ## section should be included, not treated as next section."""
-        body = (
-            "## 正文\n\n"
-            "### 小节A\n\n"
-            "内容A\n\n"
-            "### 小节B\n\n"
-            "内容B\n\n"
-            "## 下一节\n\n"
-            "下一节内容\n"
-        )
-        result = Writer._extract_section(body, "正文")
-        assert "小节A" in result
-        assert "小节B" in result
-        assert "下一节" not in result
-
-
-class TestSplitChecklist:
-    def test_separator(self):
-        text = "正文内容\n---\n清单内容"
-        body, checklist = Writer._split_checklist(text)
-        assert body == "正文内容"
-        assert checklist == "清单内容"
-
-    def test_heading(self):
-        text = "正文内容\n\n## 自检清单\n\n- item1\n- item2"
-        body, checklist = Writer._split_checklist(text)
-        assert "正文内容" in body
-        assert "item1" in checklist
-
-    def test_no_checklist(self):
-        text = "纯正文没有清单"
-        body, checklist = Writer._split_checklist(text)
-        assert body == text
-        assert checklist == ""
-
 # ── 2. State machine ────────────────────────────────────────────────
 
 
@@ -591,19 +506,18 @@ class TestPublish:
     def test_publish_creates_file_and_deletes_draft(self, tmp_path):
         w, llm, cfg = self._setup_content_stage(tmp_path)
         # Remove checklist from draft so publish doesn't need force
-        post = w._load_draft()
-        if "## 自检清单" in post.content:
-            idx = post.content.index("## 自检清单")
-            post.content = post.content[:idx].rstrip() + "\n"
-            w._save_draft(post)
+        meta, content = w._load_draft()
+        meta["checklist"] = ""
+        w._save_draft(meta, content)
 
         llm.structured_call.return_value = {"should_backfill": False, "items": []}
         result = w.publish()
         assert "已发布" in result
+        assert not w.draft_meta_path.exists()
         assert not w.draft_path.exists()
         # Check published file exists
         pub_files = list(cfg.knowledge.publish_path.glob("*.md"))
-        pub_files = [f for f in pub_files if f.name not in ("draft.md", "draft.bak.md")]
+        pub_files = [f for f in pub_files if "draft" not in f.name]
         assert len(pub_files) == 1
 
     def test_publish_rejects_concept_stage(self, tmp_path):
@@ -631,11 +545,9 @@ class TestPublish:
         """Publish should succeed even if backfill LLM call raises an exception."""
         w, llm, cfg = self._setup_content_stage(tmp_path)
         # Remove checklist so publish doesn't need force
-        post = w._load_draft()
-        if "## 自检清单" in post.content:
-            idx = post.content.index("## 自检清单")
-            post.content = post.content[:idx].rstrip() + "\n"
-            w._save_draft(post)
+        meta, content = w._load_draft()
+        meta["checklist"] = ""
+        w._save_draft(meta, content)
         # Need a topic so _evaluate_backfill actually calls LLM
         topic_post = new_post("相关内容\n", title="测试主题相关")
         w.store.write_note(cfg.knowledge.topics_path / "related.md", topic_post)
@@ -644,19 +556,19 @@ class TestPublish:
         result = w.publish()
         assert "已发布" in result
         assert "回填" in result and "失败" in result
-        assert not w.draft_path.exists()
+        assert not w.draft_meta_path.exists()
         # Published file should exist
         pub_files = [f for f in cfg.knowledge.publish_path.glob("*.md")
-                     if f.name not in ("draft.md", "draft.bak.md")]
+                     if "draft" not in f.name]
         assert len(pub_files) == 1
 
     def test_publish_blocked_by_checklist(self, tmp_path):
         """Publish should warn when checklist has items, unless force=True."""
         w, llm, cfg = self._setup_content_stage(tmp_path)
         # Make sure the draft has a checklist
-        post = w._load_draft()
-        post.content += "\n## 自检清单\n\n- 数据来源：2023年\n- 推理：因果推断\n"
-        w._save_draft(post)
+        meta, content = w._load_draft()
+        meta["checklist"] = "- 数据来源：2023年\n- 推理：因果推断"
+        w._save_draft(meta, content)
 
         llm.structured_call.return_value = {"should_backfill": False, "items": []}
         result = w.publish()
@@ -668,14 +580,14 @@ class TestPublish:
     def test_publish_force_overrides_checklist(self, tmp_path):
         """publish(force=True) should succeed even with checklist items."""
         w, llm, cfg = self._setup_content_stage(tmp_path)
-        post = w._load_draft()
-        post.content += "\n## 自检清单\n\n- 数据来源：2023年\n"
-        w._save_draft(post)
+        meta, content = w._load_draft()
+        meta["checklist"] = "- 数据来源：2023年"
+        w._save_draft(meta, content)
 
         llm.structured_call.return_value = {"should_backfill": False, "items": []}
         result = w.publish(force=True)
         assert "已发布" in result
-        assert not w.draft_path.exists()
+        assert not w.draft_meta_path.exists()
 
 
 class TestBackfill:
@@ -844,24 +756,30 @@ class TestHistoryCap:
 
 class TestDraftVersioning:
     def test_backup_created_on_save(self, tmp_path):
-        """Saving a draft should create draft.bak.md with the previous version."""
+        """Saving a draft should create backup files."""
         w, llm, cfg = make_writer(tmp_path)
         llm.structured_call.return_value = CONCEPT_RESULT
         w.start("idea")
-        # First save creates draft.md, no backup yet (nothing to back up)
+        # First save creates files, no backup yet
+        assert w.draft_meta_path.exists()
         assert w.draft_path.exists()
-        bak_path = w.draft_path.with_suffix(".bak.md")
-        assert not bak_path.exists()
+        bak_json = w.draft_meta_path.with_suffix(".json.bak")
+        bak_md = w.draft_path.with_suffix(".md.bak")
+        assert not bak_json.exists()
+        assert not bak_md.exists()
 
         # Second save should create backup
         llm.structured_call.return_value = FRAMEWORK_RESULT
         w.handle_message("确认")
-        assert bak_path.exists()
-        bak_post = read_note(bak_path)
-        assert "核心概念" in bak_post.content
+        assert bak_json.exists()
+        # Verify backup contains previous stage
+        import json
+        with bak_json.open("r") as f:
+            bak_meta = json.load(f)
+        assert bak_meta["stage"] == STAGE_CONCEPT
 
     def test_restore_draft(self, tmp_path):
-        """restore_draft() should copy draft.bak.md over draft.md."""
+        """restore_draft() should restore from backup files."""
         w, llm, cfg = make_writer(tmp_path)
         llm.structured_call.return_value = CONCEPT_RESULT
         w.start("idea")
@@ -871,76 +789,11 @@ class TestDraftVersioning:
         # Now restore — draft should go back to concept stage
         result = w.restore_draft()
         assert "已恢复" in result
-        post = read_note(w.draft_path)
-        assert post.get("stage") == STAGE_CONCEPT
+        meta, _ = w._load_draft()
+        assert meta["stage"] == STAGE_CONCEPT
 
     def test_restore_no_backup(self, tmp_path):
         """restore_draft() with no backup should return error message."""
         w, llm, cfg = make_writer(tmp_path)
         result = w.restore_draft()
         assert "没有可恢复" in result
-
-
-# ── 9. Partial draft update ───────────────────────────────────────
-
-
-class TestPartialDraftUpdate:
-    def test_splice_unchanged_sections(self):
-        """_splice_unchanged should replace [UNCHANGED] sections with originals."""
-        original = "## 引言\n\n旧引言。\n\n## 论证\n\n旧论证。\n\n## 结论\n\n旧结论。\n"
-        updated = "## 引言\n\n新引言。\n\n## 论证\n\n[UNCHANGED]\n\n## 结论\n\n新结论。\n"
-        result = Writer._splice_unchanged(original, updated)
-        assert "新引言" in result
-        assert "旧论证" in result
-        assert "新结论" in result
-        assert "[UNCHANGED]" not in result
-
-    def test_splice_no_unchanged_returns_updated(self):
-        """When no [UNCHANGED] markers, return updated as-is."""
-        original = "旧内容"
-        updated = "全新内容"
-        result = Writer._splice_unchanged(original, updated)
-        assert result == updated
-
-
-# ── 10. Parse outline ─────────────────────────────────────────────
-
-
-class TestParseOutline:
-    FRAMEWORK_BODY = (
-        "### 方案 1：问题驱动型\n"
-        "- **引言**：C/C++ 的内存安全痛点\n"
-        "- **论证**：Rust 所有权如何解决\n"
-        "- **总结**：实际效果评估\n\n"
-        "### 方案 2：机制解析型\n"
-        "- **背景**：所有权系统的三个规则\n"
-        "- **应用**：规则如何阻止漏洞\n"
-    )
-
-    def test_parse_by_number(self):
-        result = Writer._parse_outline(self.FRAMEWORK_BODY, "选方案1")
-        assert len(result) == 3
-        assert result[0] == {"heading": "引言", "point": "C/C++ 的内存安全痛点"}
-        assert result[1]["heading"] == "论证"
-        assert result[2]["heading"] == "总结"
-
-    def test_parse_by_name(self):
-        result = Writer._parse_outline(self.FRAMEWORK_BODY, "方案2")
-        assert len(result) == 2
-        assert result[0]["heading"] == "背景"
-
-    def test_parse_second_scheme(self):
-        result = Writer._parse_outline(self.FRAMEWORK_BODY, "选方案 2")
-        assert len(result) == 2
-        assert result[0] == {"heading": "背景", "point": "所有权系统的三个规则"}
-
-    def test_parse_no_match_returns_first(self):
-        """When feedback doesn't match any方案, default to the first."""
-        result = Writer._parse_outline(self.FRAMEWORK_BODY, "随便写")
-        assert len(result) == 3
-        assert result[0]["heading"] == "引言"
-
-    def test_parse_single_scheme(self):
-        body = "### 方案 1：唯一方案\n- **第一节**：要点一\n- **第二节**：要点二\n"
-        result = Writer._parse_outline(body, "确认")
-        assert len(result) == 2

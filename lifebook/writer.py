@@ -161,17 +161,13 @@ class Writer:
         if not self.active:
             return "当前没有进行中的写作。"
 
-        post = self._load_draft()
-        stage = post.get("stage")
+        meta, content = self._load_draft()
+        stage = meta.get("stage") if meta else None
         if stage not in (STAGE_CONTENT, STAGE_REVIEW):
             return f"当前阶段是 {stage}，还不能发布。请至少完成内容延展阶段。"
 
-        # Extract sections from draft
-        body = post.content
-        title = post.get("title", "untitled")
-
-        # Split off self-check list if present
-        content_text, checklist = self._split_checklist(body)
+        title = meta.get("title", "untitled") if meta else "untitled"
+        checklist = meta.get("checklist", "") if meta else ""
 
         # Warn if checklist has items and force is not set
         if not force and checklist.strip():
@@ -191,12 +187,12 @@ class Writer:
         # Build published note
         pub_meta = {
             "title": title,
-            "created": post.get("created", now_iso()),
+            "created": meta.get("created", now_iso()) if meta else now_iso(),
             "published_at": now_iso(),
-            "tags": sanitize_tags(post.get("tags") or []),
+            "tags": sanitize_tags(meta.get("tags") or []) if meta else [],
             "status": "published",
         }
-        pub_post = new_post(content_text.strip() + "\n", **pub_meta)
+        pub_post = new_post(content.strip() + "\n", **pub_meta)
 
         stem = slugify(title)
         pub_path = unique_path(self.cfg.knowledge.publish_path, stem)
@@ -204,7 +200,7 @@ class Writer:
         logger.info("published title=%r path=%s", title, pub_path)
 
         # Evaluate backfill
-        backfill_msg = self._evaluate_backfill(title, content_text)
+        backfill_msg = self._evaluate_backfill(title, content)
         logger.info("backfill result: %s", backfill_msg[:100] if backfill_msg else "none")
 
         # Clean up
@@ -579,146 +575,3 @@ class Writer:
             stage = self.stage or "unknown"
             logger.info("draft restored from backup, stage=%s", stage)
             return f"已恢复到上一版本（阶段：{stage}）"
-
-    @staticmethod
-    def _extract_section(body: str, heading: str, keep_header: bool = False) -> str:
-        """Extract content under a ## heading from markdown body.
-
-        Skips heading detection inside fenced code blocks (```).
-        Only matches ## (H2) headings, not ### or deeper.
-        """
-        import re
-        lines = body.split("\n")
-        start = None
-        end = None
-        in_code_block = False
-        heading_re = re.compile(rf"^## {re.escape(heading)}\s*$")
-        any_h2_re = re.compile(r"^## .+")
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped.startswith("```"):
-                in_code_block = not in_code_block
-                continue
-            if in_code_block:
-                continue
-            if heading_re.match(stripped):
-                start = i
-            elif start is not None and any_h2_re.match(stripped) and i > start:
-                end = i
-                break
-        if start is None:
-            return ""
-        section_lines = lines[start:end] if end else lines[start:]
-        if not keep_header and section_lines:
-            section_lines = section_lines[1:]  # skip the ## heading line
-        return "\n".join(section_lines).strip()
-
-    @staticmethod
-    def _split_checklist(text: str) -> tuple[str, str]:
-        """Split content into (main_body, checklist) at --- separator."""
-        # Look for --- near the end that separates checklist
-        parts = text.rsplit("\n---\n", 1)
-        if len(parts) == 2:
-            return parts[0], parts[1]
-        # Also try ## 自检清单 heading
-        if "## 自检清单" in text:
-            idx = text.index("## 自检清单")
-            return text[:idx].rstrip(), text[idx + len("## 自检清单"):].strip()
-        return text, ""
-
-    @staticmethod
-    def _splice_unchanged(original: str, updated: str) -> str:
-        """Replace [UNCHANGED] sections in updated with corresponding sections from original.
-
-        When a ## section in updated contains only "[UNCHANGED]", the entire
-        section content from original is substituted in.
-        """
-        import re
-        if "[UNCHANGED]" not in updated:
-            return updated
-
-        # Parse both into heading→content maps
-        def parse_sections(text: str) -> dict[str, str]:
-            sections: dict[str, str] = {}
-            current_key: str | None = None
-            current_lines: list[str] = []
-            in_code = False
-            for line in text.split("\n"):
-                stripped = line.strip()
-                if stripped.startswith("```"):
-                    in_code = not in_code
-                if not in_code and re.match(r"^## .+", stripped):
-                    if current_key is not None:
-                        sections[current_key] = "\n".join(current_lines)
-                    current_key = stripped
-                    current_lines = [line]
-                elif current_key is not None:
-                    current_lines.append(line)
-            if current_key is not None:
-                sections[current_key] = "\n".join(current_lines)
-            return sections
-
-        orig_sections = parse_sections(original)
-        upd_sections = parse_sections(updated)
-
-        # Replace [UNCHANGED] sections
-        for heading, content in upd_sections.items():
-            if "[UNCHANGED]" in content and heading in orig_sections:
-                upd_sections[heading] = orig_sections[heading]
-
-        # Reassemble: keep order from updated
-        result_parts: list[str] = []
-        for heading in upd_sections:
-            result_parts.append(upd_sections[heading])
-        return "\n".join(result_parts)
-
-    @staticmethod
-    def _parse_outline(body: str, feedback: str) -> list[dict[str, str]]:
-        """Parse framework body to extract outline items for the selected方案.
-
-        Returns list of {"heading": ..., "point": ...} for the chosen方案.
-        Defaults to first方案 if feedback doesn't match any.
-        """
-        import re
-
-        # Split into scheme blocks: "### 方案 N：name\n- **h**：p\n..."
-        scheme_re = re.compile(r"^### (方案\s*\d+)\s*[：:]\s*(.+)$")
-        item_re = re.compile(r"^-\s+\*\*(.+?)\*\*\s*[：:]\s*(.+)$")
-
-        schemes: list[tuple[str, str, list[dict[str, str]]]] = []
-        current_name: str | None = None
-        current_label: str | None = None
-        current_items: list[dict[str, str]] = []
-
-        for line in body.split("\n"):
-            stripped = line.strip()
-            m = scheme_re.match(stripped)
-            if m:
-                if current_label is not None:
-                    schemes.append((current_label, current_name or "", current_items))
-                current_label = m.group(1).replace(" ", "")
-                current_name = m.group(2).strip()
-                current_items = []
-                continue
-            m = item_re.match(stripped)
-            if m and current_label is not None:
-                current_items.append({"heading": m.group(1), "point": m.group(2)})
-
-        if current_label is not None:
-            schemes.append((current_label, current_name or "", current_items))
-
-        if not schemes:
-            return []
-
-        # Match feedback to a scheme
-        fb = feedback.replace(" ", "")
-        for label, name, items in schemes:
-            if label in fb or name in fb:
-                return items
-            # "选方案1" / "方案2" patterns
-            num_match = re.search(r"方案(\d+)", label)
-            if num_match and num_match.group(1) in fb:
-                return items
-
-        # Default to first
-        return schemes[0][2]
