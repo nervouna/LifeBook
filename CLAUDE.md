@@ -30,7 +30,7 @@ Knowledge base system: inbox sources → LLM extraction → topic notes → vect
 - **executor.py**: core pipeline. Claims file (fcntl lock), fetches URL, calls LLM, validates, writes topic note.
 - **llm.py**: Anthropic Messages API wrapper. `structured_call` (forced tool_use), `text_call`, `agentic_call` (multi-turn tool loop). Includes DeepSeek XML fallback parser.
 - **feishu.py**: WebSocket bot. Slash commands: `/write`, `/publish`, `/process`, `/update-index`, `/search`, `/status`.
-- **writer.py**: interactive writing agent with draft stages (concept → framework → content → review → publish).
+- **writer.py**: interactive writing agent with draft stages (concept → framework → content → review → publish). File structure: `draft.json` (metadata), `draft.md` (content), `draft.history.json` (discussion).
 - **prompts.py**: LLM system prompts and tool schemas with strict output formatting rules. Modifying schemas here changes LLM behavior — test after changes.
 - **store.py**: filesystem abstraction with fcntl-based file locking (macOS/Linux only).
 

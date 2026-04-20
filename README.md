@@ -1,6 +1,6 @@
 # LifeBook
 
-Personal knowledge base: inbox → LLM extraction → topic notes → vector index.
+Personal knowledge base: inbox → LLM extraction → topic notes → vector index. Includes interactive writing agent.
 
 ## Setup
 
