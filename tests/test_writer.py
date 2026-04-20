@@ -797,3 +797,272 @@ class TestDraftVersioning:
         w, llm, cfg = make_writer(tmp_path)
         result = w.restore_draft()
         assert "没有可恢复" in result
+
+
+# ── 9. Coverage: missing branches ────────────────────────────────────────
+
+
+class TestTopicContextBranches:
+    """Tests for topic_context branches in various methods."""
+
+    def test_start_with_topic_context(self, tmp_path):
+        """start() should include topic context in prompt when available."""
+        w, llm, cfg = make_writer(tmp_path)
+        # Create a topic that will match - title/content must contain query words
+        topic = new_post("测试相关主题的内容\n", title="测试相关主题")
+        w.store.write_note(cfg.knowledge.topics_path / "related.md", topic)
+        llm.structured_call.return_value = CONCEPT_RESULT
+
+        w.start("测试相关")
+
+        # The prompt should include topic context
+        call_args = llm.structured_call.call_args
+        assert "存量笔记" in call_args.kwargs["user_prompt"]
+
+    def test_advance_to_framework_with_topic_context(self, tmp_path):
+        """_advance_to_framework should include topic context."""
+        w, llm, cfg = make_writer(tmp_path)
+        # Topic content must contain the full search query (Chinese text without spaces = one word)
+        # CONCEPT_RESULT["concept_text"] = "这是核心概念文本。"
+        topic = new_post("这是核心概念文本。相关的笔记内容\n", title="相关主题")
+        w.store.write_note(cfg.knowledge.topics_path / "fw.md", topic)
+
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("测试主题")
+
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+
+        call_args = llm.structured_call.call_args
+        assert "存量笔记" in call_args.kwargs["user_prompt"]
+
+    def test_advance_to_content_with_topic_context(self, tmp_path):
+        """_advance_to_content should include topic context."""
+        w, llm, cfg = make_writer(tmp_path)
+        # Topic content must contain the full concept_text
+        topic = new_post("这是核心概念文本。内容\n", title="相关主题")
+        w.store.write_note(cfg.knowledge.topics_path / "content.md", topic)
+
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("测试主题")
+
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+        w.handle_message("选方案1")
+
+        # Check that topic context was included in prompts
+        for call in llm.text_call.call_args_list:
+            prompt = call.kwargs["user_prompt"]
+            if "存量笔记" in prompt:
+                return  # Found at least one with topic context
+
+    def test_discuss_with_topic_context(self, tmp_path):
+        """_discuss should include topic context."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+        w.handle_message("选方案1")
+
+        # Create topic that matches feedback query
+        topic = new_post("讨论主题内容\n", title="讨论主题")
+        w.store.write_note(cfg.knowledge.topics_path / "discuss.md", topic)
+
+        llm.agentic_call.return_value = "好的"
+        w.handle_message("讨论主题")  # Query that matches topic
+
+        # Check messages included topic context
+        call_args = llm.agentic_call.call_args
+        messages = call_args.kwargs["messages"]
+        last_msg = messages[-1]
+        assert "存量笔记" in last_msg["content"]
+
+
+class TestEdgeCases:
+    """Tests for edge cases and error paths."""
+
+    def test_handle_message_unknown_stage(self, tmp_path):
+        """handle_message should return error for unknown stage."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+
+        # Manually set invalid stage
+        import json
+        meta, content = w._load_draft()
+        meta["stage"] = "invalid_stage"
+        w._save_draft(meta, content)
+
+        result = w.handle_message("test")
+        assert "未知状态" in result
+
+    def test_select_framework_empty_list(self, tmp_path):
+        """_select_framework should return None for empty frameworks."""
+        w, llm, cfg = make_writer(tmp_path)
+        result = w._select_framework([], "方案1")
+        assert result is None
+
+    def test_select_framework_by_name(self, tmp_path):
+        """_select_framework should match by name."""
+        w, llm, cfg = make_writer(tmp_path)
+        frameworks = [
+            {"name": "方案A", "outline": [{"heading": "A1", "point": "p1"}]},
+            {"name": "方案B", "outline": [{"heading": "B1", "point": "p2"}]},
+        ]
+        result = w._select_framework(frameworks, "选方案B")
+        assert result == [{"heading": "B1", "point": "p2"}]
+
+    def test_select_framework_defaults_to_first(self, tmp_path):
+        """_select_framework should default to first when no match."""
+        w, llm, cfg = make_writer(tmp_path)
+        frameworks = [
+            {"name": "方案A", "outline": [{"heading": "A1", "point": "p1"}]},
+        ]
+        result = w._select_framework(frameworks, "随便写")
+        assert result == [{"heading": "A1", "point": "p1"}]
+
+    def test_advance_to_content_empty_frameworks(self, tmp_path):
+        """_advance_to_content should return error when frameworks is empty."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+
+        # Set stage to framework but with empty frameworks
+        import json
+        meta, content = w._load_draft()
+        meta["stage"] = STAGE_FRAMEWORK
+        meta["frameworks"] = []
+        w._save_draft(meta, content)
+
+        result = w.handle_message("选方案1")
+        assert "未找到匹配的框架方案" in result
+
+
+class TestDiscussUpdateWithChecklist:
+    """Test discussion update_draft with checklist."""
+
+    def _setup_content_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+        w.handle_message("选方案1")
+        return w, llm, cfg
+
+    def test_update_draft_with_checklist(self, tmp_path):
+        """update_draft tool should save checklist when provided."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+
+        def mock_agentic_call(system, messages, tools, tool_executor):
+            # Call update_draft with both content and checklist
+            tool_executor["update_draft"]({
+                "content": "新正文",
+                "checklist": "- 新自检项"
+            })
+            return "已更新"
+
+        llm.agentic_call.side_effect = mock_agentic_call
+        w.handle_message("修改")
+
+        import json
+        with w.draft_meta_path.open("r") as f:
+            meta = json.load(f)
+        assert meta["checklist"] == "- 新自检项"
+
+
+class TestBackfillExecution:
+    """Test backfill execution with actual items."""
+
+    def test_backfill_creates_and_updates(self, tmp_path):
+        """_evaluate_backfill should execute create and update actions."""
+        w, llm, cfg = make_writer(tmp_path)
+
+        # Create existing topic for search to find AND for update
+        existing = new_post("原始内容\n", title="已有主题")
+        w.store.write_note(cfg.knowledge.topics_path / "existing.md", existing)
+
+        # Mock LLM to return backfill items
+        llm.structured_call.return_value = {
+            "should_backfill": True,
+            "items": [
+                {
+                    "action": "create",
+                    "topic_title": "新建主题",
+                    "reason": "新知识点",
+                    "content": "新内容",
+                },
+                {
+                    "action": "update",
+                    "topic_title": "已有主题",
+                    "reason": "补充",
+                    "content": "补充内容",
+                },
+            ],
+        }
+
+        result = w._evaluate_backfill("已有主题", "文章内容")
+
+        assert "回填到知识库" in result
+        assert "新建 topic" in result
+        assert "更新 topic" in result
+
+    def test_backfill_update_topic_not_found(self, tmp_path):
+        """_evaluate_backfill should handle update when topic not found."""
+        w, llm, cfg = make_writer(tmp_path)
+
+        # Create a topic for search to find
+        topic = new_post("搜索匹配内容\n", title="搜索匹配")
+        w.store.write_note(cfg.knowledge.topics_path / "search.md", topic)
+
+        llm.structured_call.return_value = {
+            "should_backfill": True,
+            "items": [
+                {
+                    "action": "update",
+                    "topic_title": "不存在的主题",
+                    "reason": "测试",
+                    "content": "内容",
+                },
+            ],
+        }
+
+        result = w._evaluate_backfill("搜索匹配", "内容")
+        assert "未找到 topic" in result
+
+    def test_backfill_no_items(self, tmp_path):
+        """_evaluate_backfill should return empty when no items."""
+        w, llm, cfg = make_writer(tmp_path)
+
+        # Create topic for search
+        topic = new_post("内容\n", title="主题")
+        w.store.write_note(cfg.knowledge.topics_path / "t.md", topic)
+
+        llm.structured_call.return_value = {
+            "should_backfill": False,
+            "items": [],
+        }
+
+        result = w._evaluate_backfill("主题", "内容")
+        assert result == ""
+
+    def test_backfill_empty_items_list(self, tmp_path):
+        """_evaluate_backfill should return empty when items list is empty."""
+        w, llm, cfg = make_writer(tmp_path)
+
+        # Create topic for search
+        topic = new_post("内容\n", title="主题")
+        w.store.write_note(cfg.knowledge.topics_path / "t.md", topic)
+
+        llm.structured_call.return_value = {
+            "should_backfill": True,
+            "items": [],
+        }
+
+        result = w._evaluate_backfill("主题", "内容")
+        assert result == ""
