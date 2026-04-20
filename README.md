@@ -14,11 +14,14 @@ LifeBook/
 │   ├── __init__.py
 │   ├── config.py       # 配置加载
 │   ├── executor.py     # 加工流程
-│   ├── llm.py          # LLM 客户端（Anthropic 兼容接口）
+│   ├── llm.py          # LLM 客户端（Anthropic Messages API）
 │   ├── feishu.py       # 飞书机器人
 │   ├── digest.py       # 每日摘要
+│   ├── fetcher.py      # 网页抓取
+│   ├── writer.py       # 交互式写作
+│   ├── store.py        # 文件系统笔记存储
+│   ├── vector.py       # 向量索引
 │   └── cli.py          # 命令行入口
-├── scripts/            # 启动脚本、launchd plist
 ├── tests/
 ├── config.example.yaml # 配置模板
 └── pyproject.toml
@@ -56,4 +59,25 @@ lifebook process              # 加工 inbox 中所有 status: inbox 的文件
 lifebook process --file PATH  # 加工单个文件
 lifebook digest               # 生成并推送今日摘要
 lifebook serve                # 启动飞书机器人监听
+```
+
+## 自动启动（launchd）
+
+飞书机器人通过 launchd 管理，开机自启、崩溃自动重启。
+
+```bash
+# 启动
+launchctl load ~/Library/LaunchAgents/com.lifebook.serve.plist
+
+# 停止
+launchctl unload ~/Library/LaunchAgents/com.lifebook.serve.plist
+
+# 重启
+launchctl kickstart -k gui/$(id -u)/com.lifebook.serve
+
+# 查看状态
+launchctl list | grep lifebook
+
+# 查看日志
+tail -f ~/Library/Logs/lifebook-serve.log
 ```
