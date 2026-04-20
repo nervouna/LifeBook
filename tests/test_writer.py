@@ -267,6 +267,161 @@ class TestStartNewStructure:
         assert "updated" in meta
 
 
+class TestAdvanceToFrameworkNewStructure:
+    """Tests for _advance_to_framework() with draft.json structure."""
+
+    def _setup_concept_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        return w, llm, cfg
+
+    def test_framework_saved_to_json(self, tmp_path):
+        """_advance_to_framework should save frameworks to draft.json."""
+        w, llm, cfg = self._setup_concept_stage(tmp_path)
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+
+        w.handle_message("确认")
+
+        import json
+        with w.draft_meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        assert meta["stage"] == STAGE_FRAMEWORK
+        assert "frameworks" in meta
+        assert len(meta["frameworks"]) == 2
+        assert meta["frameworks"][0]["name"] == "方案A"
+
+    def test_framework_not_in_md(self, tmp_path):
+        """_advance_to_framework should NOT write frameworks to draft.md."""
+        w, llm, cfg = self._setup_concept_stage(tmp_path)
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+
+        w.handle_message("确认")
+
+        content = w.draft_path.read_text(encoding="utf-8")
+        assert content == ""  # md should remain empty at framework stage
+
+    def test_framework_renders_for_display(self, tmp_path):
+        """_advance_to_framework should return formatted frameworks for display."""
+        w, llm, cfg = self._setup_concept_stage(tmp_path)
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+
+        result = w.handle_message("确认")
+
+        assert "方案" in result
+        assert "方案A" in result
+        assert "方案B" in result
+
+
+class TestAdvanceToContentNewStructure:
+    """Tests for _advance_to_content() with draft.json structure."""
+
+    def _setup_framework_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        return w, llm, cfg
+
+    def test_content_written_to_md(self, tmp_path):
+        """_advance_to_content should write content to draft.md."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+
+        w.handle_message("选方案1")
+
+        content = w.draft_path.read_text(encoding="utf-8")
+        assert "引言段落" in content
+        assert "论证段落" in content
+
+    def test_checklist_saved_to_json(self, tmp_path):
+        """_advance_to_content should save checklist to draft.json."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+
+        w.handle_message("选方案1")
+
+        import json
+        with w.draft_meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        assert meta["stage"] == STAGE_CONTENT
+        assert "checklist" in meta
+        assert "数据来源" in meta["checklist"]
+
+    def test_framework_selection_by_index(self, tmp_path):
+        """_advance_to_content should select framework by index from JSON."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        # 方案A has 2 sections, 方案B has 1 section
+        llm.text_call.side_effect = ["唯一段落。", "- 自检项"]
+
+        w.handle_message("选方案2")
+
+        # Should have generated 1 section (方案B has 1 outline item)
+        assert llm.text_call.call_count == 2  # 1 section + 1 checklist
+
+
+class TestDiscussNewStructure:
+    """Tests for _discuss() with persistent history."""
+
+    def _setup_content_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+        w.handle_message("选方案1")
+        return w, llm, cfg
+
+    def test_history_saved_to_file(self, tmp_path):
+        """_discuss should save history to draft.history.json."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+        llm.agentic_call.return_value = "好的，已修改。"
+
+        w.handle_message("修改引言")
+
+        import json
+        assert w.history_path.exists()
+        with w.history_path.open("r", encoding="utf-8") as f:
+            history = json.load(f)
+        assert len(history) == 2  # user + assistant
+
+    def test_history_loaded_from_file(self, tmp_path):
+        """_discuss should load existing history from file."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+
+        # Create existing history
+        import json
+        existing = [{"role": "user", "content": "旧反馈"}, {"role": "assistant", "content": "旧回复"}]
+        with w.history_path.open("w", encoding="utf-8") as f:
+            json.dump(existing, f)
+
+        llm.agentic_call.return_value = "新回复"
+        w.handle_message("新反馈")
+
+        with w.history_path.open("r", encoding="utf-8") as f:
+            history = json.load(f)
+        assert len(history) == 4  # 2 old + 2 new
+
+    def test_content_updated_in_md(self, tmp_path):
+        """_discuss should update content in draft.md via update_draft tool."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+
+        def mock_agentic_call(system, messages, tools, tool_executor):
+            # Simulate update_draft tool call
+            tool_executor["update_draft"]({"content": "新的正文内容。"})
+            return "已更新正文。"
+
+        llm.agentic_call.side_effect = mock_agentic_call
+        w.handle_message("修改正文")
+
+        content = w.draft_path.read_text(encoding="utf-8")
+        assert content == "新的正文内容。"
+
+
 # ── 1. Static helpers (to be removed) ────────────────────────────────────────
 
 

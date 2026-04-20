@@ -222,16 +222,13 @@ class Writer:
     def _advance_to_framework(self, feedback: str) -> str:
         """User confirmed/modified concept → generate frameworks."""
         logger.info("advancing to framework stage")
-        post = self._load_draft()
+        meta, content = self._load_draft()
 
-        # Update concept section if user provided modifications
-        concept_section = self._extract_section(post.content, "核心概念")
-        topic_context = self.store.search_topics_formatted(concept_section)
+        concept = meta.get("concept", {}) if meta else {}
+        concept_text = concept.get("concept_text", "")
+        topic_context = self.store.search_topics_formatted(concept_text)
 
-        prompt = (
-            f"已确认的核心概念：\n{concept_section}\n\n"
-            f"用户反馈：\n{feedback}"
-        )
+        prompt = f"已确认的核心概念：\n{concept_text}\n\n用户反馈：\n{feedback}"
         if topic_context:
             prompt += f"\n\n存量笔记参考：\n{topic_context}"
 
@@ -243,29 +240,22 @@ class Writer:
             system=FRAMEWORK_SYSTEM,
         )
 
-        # Format frameworks for display and storage
         frameworks = result["frameworks"]
         logger.info("frameworks generated: %d", len(frameworks))
+
+        # Update metadata
+        meta["stage"] = STAGE_FRAMEWORK
+        meta["frameworks"] = frameworks
+        meta["updated"] = now_iso()
+        self._save_draft(meta, content)
+
+        # Format for display
         display_parts = []
-        storage_parts = []
         for i, fw in enumerate(frameworks, 1):
             display_parts.append(f"方案 {i}：{fw['name']}")
-            storage_parts.append(f"### 方案 {i}：{fw['name']}")
             for item in fw["outline"]:
                 display_parts.append(f"  - {item['heading']}：{item['point']}")
-                storage_parts.append(f"- **{item['heading']}**：{item['point']}")
             display_parts.append("")
-            storage_parts.append("")
-
-        # Update draft
-        post.content = (
-            self._extract_section(post.content, "核心概念", keep_header=True)
-            + "\n\n## 框架\n\n"
-            + "\n".join(storage_parts)
-        )
-        post["stage"] = STAGE_FRAMEWORK
-        post["updated"] = now_iso()
-        self._save_draft(post)
 
         return (
             "以下是 2-3 个框架方案：\n\n"
@@ -277,108 +267,115 @@ class Writer:
     def _advance_to_content(self, feedback: str) -> str:
         """User chose/modified framework → generate content section by section."""
         logger.info("advancing to content stage (sequential)")
-        post = self._load_draft()
+        meta, content = self._load_draft()
 
-        concept_section = self._extract_section(post.content, "核心概念")
-        framework_section = self._extract_section(post.content, "框架")
-        topic_context = self.store.search_topics_formatted(concept_section)
+        concept = meta.get("concept", {}) if meta else {}
+        concept_text = concept.get("concept_text", "")
+        frameworks = meta.get("frameworks", [])
+        topic_context = self.store.search_topics_formatted(concept_text)
 
-        # Parse outline from framework
-        outline = self._parse_outline(framework_section, feedback)
+        # Select framework by index or name
+        outline = self._select_framework(frameworks, feedback)
         if not outline:
-            # Fallback: generate all at once if outline parsing fails
+            return "未找到匹配的框架方案，请重新选择。"
+
+        # Generate each section sequentially
+        generated_sections: list[str] = []
+        for item in outline:
+            previous = "\n\n".join(generated_sections) if generated_sections else "（还没有已写好的章节）"
             prompt = (
-                f"核心概念：\n{concept_section}\n\n"
-                f"可选框架：\n{framework_section}\n\n"
-                f"用户选择/反馈：\n{feedback}"
+                f"核心概念：\n{concept_text}\n\n"
+                f"当前章节：{item['heading']}\n\n"
+                f"章节要点：{item['point']}\n\n"
+                f"之前已写好的章节：\n{previous}"
             )
             if topic_context:
                 prompt += f"\n\n存量笔记参考：\n{topic_context}"
-            content = self.llm.text_call(user_prompt=prompt, system=CONTENT_SYSTEM)
-            content_body, checklist = self._split_checklist(content)
-            sections_text = content_body.strip()
-            checklist_text = checklist.strip() if checklist else ""
-        else:
-            # Generate each section sequentially
-            generated_sections: list[str] = []
-            for item in outline:
-                previous = "\n\n".join(generated_sections) if generated_sections else "（还没有已写好的章节）"
-                prompt = (
-                    f"核心概念：\n{concept_section}\n\n"
-                    f"文章框架：\n{framework_section}\n\n"
-                    f"之前已写好的章节：\n{previous}\n\n"
-                    f"请展开这一节：\n## {item['heading']}\n\n{item['point']}"
-                )
-                if topic_context:
-                    prompt += f"\n\n存量笔记参考：\n{topic_context}"
-                section_content = self.llm.text_call(
-                    user_prompt=prompt,
-                    system=SECTION_SYSTEM,
-                )
-                generated_sections.append(section_content.strip())
+            section_content = self.llm.text_call(
+                user_prompt=prompt,
+                system=SECTION_SYSTEM,
+            )
+            generated_sections.append(section_content.strip())
 
-            # Generate checklist separately
-            full_body = "\n\n".join(generated_sections)
-            checklist_prompt = f"文章正文：\n{full_body}"
-            checklist_text = self.llm.text_call(
-                user_prompt=checklist_prompt,
-                system=CHECKLIST_SYSTEM,
-            ).strip()
-            sections_text = "\n\n".join(generated_sections)
+        # Generate checklist separately
+        full_body = "\n\n".join(generated_sections)
+        checklist_prompt = f"文章正文：\n{full_body}"
+        checklist_text = self.llm.text_call(
+            user_prompt=checklist_prompt,
+            system=CHECKLIST_SYSTEM,
+        ).strip()
 
         # Update draft
-        post.content = (
-            self._extract_section(post.content, "核心概念", keep_header=True)
-            + "\n\n"
-            + self._extract_section(post.content, "框架", keep_header=True)
-            + "\n\n## 正文\n\n"
-            + sections_text
-            + "\n"
-        )
-        if checklist_text:
-            post.content += f"\n## 自检清单\n\n{checklist_text}\n"
-
-        post["stage"] = STAGE_CONTENT
-        post["updated"] = now_iso()
-        self._save_draft(post)
+        meta["stage"] = STAGE_CONTENT
+        meta["checklist"] = checklist_text
+        meta["updated"] = now_iso()
+        self._save_draft(meta, full_body)
 
         # Init discussion history
         self._history = [
-            {"role": "assistant", "content": sections_text},
+            {"role": "assistant", "content": full_body},
         ]
 
         return (
-            sections_text
+            full_body
             + "\n\n---\n"
             "请逐段审读。可以对任何内容提出质疑、修改意见，或对自检清单做出回应。"
             "满意后发送 /publish 完成发布。"
         )
 
+    def _select_framework(self, frameworks: list[dict], feedback: str) -> list[dict] | None:
+        """Select framework by index or name match from structured frameworks.
+
+        Returns the outline list of the selected framework, or None if no match.
+        """
+        if not frameworks:
+            return None
+
+        fb = feedback.replace(" ", "")
+
+        # Try matching by index: "方案1", "选方案2", etc.
+        import re
+        idx_match = re.search(r"方案(\d+)", fb)
+        if idx_match:
+            idx = int(idx_match.group(1)) - 1
+            if 0 <= idx < len(frameworks):
+                return frameworks[idx].get("outline", [])
+
+        # Try matching by name
+        for fw in frameworks:
+            name = fw.get("name", "").replace(" ", "")
+            if name and name in fb:
+                return fw.get("outline", [])
+
+        # Default to first framework
+        return frameworks[0].get("outline", [])
+
     def _discuss(self, feedback: str) -> str:
         """Discussion round during content/review stage."""
         logger.info("discussion round, history_len=%d", len(self._history))
-        post = self._load_draft()
+        meta, content = self._load_draft()
 
-        concept_section = self._extract_section(post.content, "核心概念")
-        current_content = self._extract_section(post.content, "正文")
-        current_checklist = self._extract_section(post.content, "自检清单")
+        concept = meta.get("concept", {}) if meta else {}
+        concept_text = concept.get("concept_text", "")
+        checklist = meta.get("checklist", "") if meta else ""
         topic_context = self.store.search_topics_formatted(feedback)
+
+        # Load history from file
+        self._load_history()
 
         # Build conversation with history
         messages = [
             {
                 "role": "user",
                 "content": (
-                    f"核心概念：\n{concept_section}\n\n"
-                    f"当前正文：\n{current_content}\n\n"
-                    f"当前自检清单：\n{current_checklist}"
+                    f"核心概念：\n{concept_text}\n\n"
+                    f"当前正文：\n{content}\n\n"
+                    f"当前自检清单：\n{checklist}"
                 ),
             },
             {"role": "assistant", "content": "好的，我已了解当前文章内容。请提出你的意见。"},
         ]
-        # Append discussion history
         messages.extend(self._history)
-        # Add current feedback
         user_msg = feedback
         if topic_context:
             user_msg += f"\n\n[系统补充的存量笔记参考：\n{topic_context}]"
@@ -389,26 +386,15 @@ class Writer:
 
         def _handle_update_draft(inp: dict) -> str:
             nonlocal draft_updated
-            content_body = inp["content"]
-            checklist = inp.get("checklist", "")
+            new_content = inp["content"]
+            new_checklist = inp.get("checklist", "")
             # Re-read draft to get latest state
-            p = self._load_draft()
-            # Splice [UNCHANGED] sections from current draft
-            current_body = self._extract_section(p.content, "正文")
-            content_body = self._splice_unchanged(current_body, content_body)
-            p.content = (
-                self._extract_section(p.content, "核心概念", keep_header=True)
-                + "\n\n"
-                + self._extract_section(p.content, "框架", keep_header=True)
-                + "\n\n## 正文\n\n"
-                + content_body.strip()
-                + "\n"
-            )
-            if checklist:
-                p.content += f"\n## 自检清单\n\n{checklist.strip()}\n"
-            p["stage"] = STAGE_REVIEW
-            p["updated"] = now_iso()
-            self._save_draft(p)
+            m, _ = self._load_draft()
+            m["stage"] = STAGE_REVIEW
+            m["updated"] = now_iso()
+            if new_checklist:
+                m["checklist"] = new_checklist
+            self._save_draft(m, new_content)
             draft_updated = True
             return "草稿已更新"
 
@@ -422,7 +408,7 @@ class Writer:
             },
         )
 
-        # Track history
+        # Track and persist history
         self._history.append({"role": "user", "content": feedback})
         self._history.append({"role": "assistant", "content": response})
 
@@ -432,14 +418,28 @@ class Writer:
             self._history = self._history[-MAX_HISTORY:]
             logger.info("history trimmed, dropped %d oldest entries", dropped)
 
+        self._save_history()
+
         # If no tool call updated the draft, still mark as review stage
         if not draft_updated:
-            post = self._load_draft()
-            post["stage"] = STAGE_REVIEW
-            post["updated"] = now_iso()
-            self._save_draft(post)
+            meta["stage"] = STAGE_REVIEW
+            meta["updated"] = now_iso()
+            self._save_draft(meta, content)
 
         return response
+
+    def _load_history(self) -> None:
+        """Load discussion history from file."""
+        if self.history_path.exists():
+            with self.history_path.open("r", encoding="utf-8") as f:
+                self._history = json.load(f)
+        else:
+            self._history = []
+
+    def _save_history(self) -> None:
+        """Save discussion history to file."""
+        with self.history_path.open("w", encoding="utf-8") as f:
+            json.dump(self._history, f, ensure_ascii=False, indent=2)
 
     # --------------- backfill ---------------
 
