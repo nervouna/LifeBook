@@ -7,3 +7,7 @@ __pycache__/
 build/
 dist/
 config.yaml
+logs/
+*.log
+.coverage
+.claude/settings.local.json
