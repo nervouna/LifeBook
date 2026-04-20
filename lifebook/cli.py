@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import time
 from pathlib import Path
 
 import click
 
-from .config import load_config, pointer_file, DEFAULT_CONFIG_PATH, resolve_config_path, KnowledgeConfig
+from .config import load_config, POINTER_FILE, DEFAULT_CONFIG_PATH, resolve_config_path, KnowledgeConfig
 
 
 @click.group()
@@ -51,7 +50,7 @@ def init(ctx: click.Context, root_path: str | None) -> None:
     for d in kb_dirs:
         d.mkdir(exist_ok=True)
 
-    ptr = pointer_file()
+    ptr = POINTER_FILE
     ptr.parent.mkdir(parents=True, exist_ok=True)
     ptr.write_text(str(root), encoding="utf-8")
     click.echo(f"Pointer file written: {ptr}")

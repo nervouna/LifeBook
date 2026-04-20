@@ -146,20 +146,6 @@ def resolve_config_path(explicit: Path | str | None = None) -> Path:
         return DEFAULT_CONFIG_PATH
 
 
-
-
-
-
-def app_config_dir() -> Path:
-    """Return the platform-specific app config directory."""
-    return APP_CONFIG_DIR
-
-
-def pointer_file() -> Path:
-    """Return the path to the location pointer file."""
-    return POINTER_FILE
-
-
 def load_config(path: Path | str | None = None) -> Config:
     """Load configuration from YAML file."""
     cfg_path = resolve_config_path(path)
