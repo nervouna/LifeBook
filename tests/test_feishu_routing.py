@@ -16,6 +16,7 @@ def _make_bot():
     bot.executor = MagicMock()
     bot.writer = MagicMock()
     bot.api = MagicMock()
+    bot.store = MagicMock()
     bot.reply_text = MagicMock(return_value="mid")
     bot._ws_client = None
     return bot
