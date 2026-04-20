@@ -7,6 +7,7 @@ name = "lifebook"
 version = "0.1.0"
 description = "Personal knowledge base with LLM-driven processing."
 requires-python = ">=3.10"
+license = "WTFPL"
 dependencies = [
     "anthropic>=0.40.0",
     "pyyaml>=6.0",
