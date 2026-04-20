@@ -8,7 +8,7 @@ import pytest
 
 from lifebook.config import Config, KnowledgeConfig, LLMConfig, TavilyConfig, FeishuConfig, ExecutorConfig, DigestConfig, FetchConfig, LoggingConfig
 from lifebook.llm import LLMClient
-from lifebook.web_search import WEB_SEARCH_TOOL, web_search
+from lifebook.fetcher import WEB_SEARCH_TOOL, web_search
 from lifebook.writer import UPDATE_DRAFT_TOOL
 
 
@@ -128,26 +128,34 @@ class TestAgenticCall:
 class TestWebSearch:
     def test_success(self, tmp_path):
         cfg = _make_cfg(tmp_path)
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
             "results": [
                 {"title": "Title1", "url": "http://example.com", "content": "Snippet1"},
             ]
         }
-        mock_resp.raise_for_status = MagicMock()
 
-        with patch("lifebook.web_search.httpx.post", return_value=mock_resp) as mock_post:
+        with patch("lifebook.fetcher.TavilyClient", return_value=mock_client):
             result = web_search("test query", cfg)
 
         assert "Title1" in result
         assert "http://example.com" in result
-        mock_post.assert_called_once()
+        mock_client.search.assert_called_once_with(query="test query", max_results=5)
 
     def test_error(self, tmp_path):
         cfg = _make_cfg(tmp_path)
-        with patch("lifebook.web_search.httpx.post", side_effect=Exception("timeout")):
+        mock_client = MagicMock()
+        mock_client.search.side_effect = Exception("timeout")
+
+        with patch("lifebook.fetcher.TavilyClient", return_value=mock_client):
             result = web_search("test", cfg)
         assert "搜索失败" in result
+
+    def test_no_api_key(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        cfg.tavily.api_key = ""
+        result = web_search("test", cfg)
+        assert "API key" in result
 
 
 # ---- _discuss integration test ----
