@@ -1,84 +1,43 @@
-# LifeBook 配置文件模板
-# 拷贝到 ~/Documents/Knowledge/.lifebook/config.yaml 后填入真实值
+# LifeBook config template
+# Run 'lifebook init' to create this file with default values
 
-# ============================================================
-# 知识库路径
-# ============================================================
 knowledge:
-  root: /Users/damao/Documents/Knowledge
+  root: /path/to/Knowledge
   sources_dir: 10-sources
   topics_dir: 20-topics
   trajectories_dir: 30-trajectories
   state_dir: .lifebook
   categories:
-    - AI技术
-    - 开发者工具
-    - 半导体
-    - 消费电子
-    - 媒体生态
-    - 组织与劳动
-    - 科技监管
-    - 经济与产业
+    - Category1
+    - Category2
 
-# ============================================================
-# LLM 配置（Anthropic 兼容接口）
-# ============================================================
-# 支持任何兼容 Anthropic Messages API 的端点：
-#   - 官方:        base_url: https://api.anthropic.com
-#   - OpenRouter:  base_url: https://openrouter.ai/api/v1  (注意 OpenRouter 需要 anthropic-beta 头)
-#   - 自建代理:    base_url: http://localhost:xxxx
 llm:
-  provider: anthropic                   # 标识用，目前只支持 anthropic 兼容
+  provider: anthropic
   base_url: https://api.anthropic.com
-  api_key: ""                           # sk-ant-xxx 或代理 key
-  model: claude-sonnet-4-5              # 加工用模型
-  digest_model: claude-sonnet-4-5       # 摘要用模型，可与上面相同
+  api_key: ""  # sk-ant-xxx
+  model: claude-sonnet-4-5
+  digest_model: claude-sonnet-4-5
   max_tokens: 4096
   temperature: 0.3
-  timeout: 120                          # 秒
-  # 可选：额外请求头（如 OpenRouter 需要的 beta 标识）
+  timeout: 120
   extra_headers: {}
 
-# ============================================================
-# 飞书机器人（长连接 WebSocket）
-# ============================================================
-# 在飞书开放平台创建机器人后：
-#   1. 事件与回调 → 连接方式选"长连接"
-#   2. 订阅事件：im.message.receive_v1
-#   3. 权限：im:message, im:message.group_at_msg, im:message:send_as_bot
-# https://open.feishu.cn/app
 feishu:
-  app_id: ""                            # cli_xxx
+  app_id: ""  # cli_xxx
   app_secret: ""
-  digest_chat_id: ""                    # oc_xxx，每日摘要推送目标
+  digest_chat_id: ""  # oc_xxx
 
-# ============================================================
-# 加工策略
-# ============================================================
 executor:
-  # 单次最多加工多少条，避免一次性烧太多 token
   batch_limit: 20
-  # 链接抓正文的超时
   fetch_timeout: 30
-  # User-Agent
-  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) LifeBook/0.1"
-  # 归类置信度阈值，低于此值标记 status: skipped 等待人工
+  user_agent: "Mozilla/5.0 LifeBook/0.1"
   classify_min_confidence: 0.5
 
-# ============================================================
-# 每日摘要
-# ============================================================
 digest:
-  # 摘要触发时间（仅供 launchd 参考，实际调度在 plist 中）
   schedule: "23:30"
-  # 是否包含异常告警段
   include_anomalies: true
-  # 摘要中每条最多展示的关联数
   max_related_per_item: 3
 
-# ============================================================
-# 日志
-# ============================================================
 logging:
-  level: INFO                           # DEBUG / INFO / WARNING / ERROR
+  level: INFO
   retention_days: 30
