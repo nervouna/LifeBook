@@ -36,6 +36,7 @@ def mock_config(tmp_path):
     cfg.llm = MagicMock()
     cfg.tavily = MagicMock()
     cfg.fetch = MagicMock()
+    cfg.vision = None
     return cfg
 
 

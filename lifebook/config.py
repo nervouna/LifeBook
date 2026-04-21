@@ -60,7 +60,6 @@ class KnowledgeConfig:
 
 @dataclass
 class LLMConfig:
-    provider: str = "openai"
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""
     model: str = "deepseek-chat"
@@ -69,6 +68,24 @@ class LLMConfig:
     temperature: float = 0.3
     timeout: int = 120
     extra_headers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class VisionConfig:
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+    max_tokens: int = 4096
+    temperature: float = 0.3
+    timeout: int = 120
+    extra_headers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ImageConfig:
+    max_long_edge: int = 1568
+    max_bytes: int = 1_048_576
+    jpeg_quality: int = 85
 
 
 @dataclass
@@ -124,6 +141,8 @@ class Config:
     tavily: TavilyConfig
     fetch: FetchConfig
     logging: LoggingConfig
+    image: ImageConfig = field(default_factory=ImageConfig)
+    vision: VisionConfig | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -175,6 +194,9 @@ def load_config(path: Path | str | None = None) -> Config:
     tavily = TavilyConfig(**_filter(TavilyConfig, raw.get("tavily")))
     fetch = FetchConfig(**_filter(FetchConfig, raw.get("fetch")))
     logging_cfg = LoggingConfig(**_filter(LoggingConfig, raw.get("logging")))
+    image = ImageConfig(**_filter(ImageConfig, raw.get("image")))
+    vision_raw = raw.get("vision")
+    vision = VisionConfig(**_filter(VisionConfig, vision_raw)) if vision_raw else None
 
     return Config(
         knowledge=knowledge,
@@ -185,5 +207,7 @@ def load_config(path: Path | str | None = None) -> Config:
         tavily=tavily,
         fetch=fetch,
         logging=logging_cfg,
+        image=image,
+        vision=vision,
         raw=raw,
     )

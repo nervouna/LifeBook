@@ -9,6 +9,8 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     CreateMessageRequest,
     CreateMessageRequestBody,
+    GetMessageResourceRequest,
+    GetMessageResourceRequestBuilder,
     P2ImMessageReceiveV1,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
@@ -73,6 +75,31 @@ class FeishuTransport:
             logger.error("reply_text failed: %s %s", resp.code, resp.msg)
             return None
         return resp.data.message_id
+
+    def download_image_message(self, message_id: str, image_key: str) -> bytes | None:
+        """Download an image resource attached to a message.
+
+        Returns raw image bytes on success, or None on failure.
+        """
+        req = (
+            GetMessageResourceRequestBuilder()
+            .message_id(message_id)
+            .file_key(image_key)
+            .type("image")
+            .build()
+        )
+        resp = self.api.im.v1.message_resource.get(req)
+        if not resp.success():
+            logger.error(
+                "download_image_message failed: %s %s (message=%s key=%s)",
+                resp.code, resp.msg, message_id, image_key,
+            )
+            return None
+        file_obj = resp.file
+        if file_obj is None:
+            logger.error("download_image_message: no file in response")
+            return None
+        return file_obj.read()
 
     def start(self, message_handler: Callable[[P2ImMessageReceiveV1], None]) -> None:
         """Start WebSocket long-connection. Blocks until stopped."""

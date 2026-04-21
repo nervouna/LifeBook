@@ -162,7 +162,7 @@ class TestSendReplyText:
 class TestNonTextMessage:
     def test_replies_for_non_text(self):
         bot = _make_bot()
-        evt = _make_event("img", msg_type="image")
+        evt = _make_event("doc", msg_type="file")
         bot._handle_message(evt)
         bot.transport.reply_text.assert_called_once()
         assert "暂不支持" in bot.transport.reply_text.call_args[0][1]

@@ -134,5 +134,5 @@ class TestEdgeCases:
 
     def test_non_text_message_rejected(self):
         bot = _make_bot()
-        bot._handle_message(_make_event("hello", msg_type="image"))
+        bot._handle_message(_make_event("hello", msg_type="file"))
         assert "暂不支持" in bot.transport.reply_text.call_args[0][1]
