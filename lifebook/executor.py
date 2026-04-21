@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .config import Config
 from .fetcher import Fetcher
+from .image_processor import ImageData, compress_image
 from .llm import LLMClient
 from .notes import (
     new_post,
@@ -26,6 +27,9 @@ STANDARD_SOURCE_FIELDS = frozenset({
     "fetch_error", "fetch_at", "fetch_via", "fetched_at",
     "processing_at", "processed_at", "topic_ref", "tags",
     "category", "llm_draft", "skip_reason",
+    "image_path", "image_hash", "image_mime",
+    "image_original_bytes", "image_compressed_bytes",
+    "image_width", "image_height",
 })
 
 
@@ -72,6 +76,10 @@ class Executor:
         post, err = self._claim(source_path)
         if err:
             return err
+
+        # Route image source_type to dedicated branch
+        if post.get("source_type") == "image":
+            return self._process_image_file(source_path, post)
 
         url = post.get("source") or ""
         content = post.content.strip()
@@ -130,6 +138,85 @@ class Executor:
         return results
 
     # ---------- pipeline steps ----------
+
+    def _process_image_file(self, source_path: Path, post: Any) -> ProcessResult:
+        """Process an image source file: compress, extract, write topic."""
+        image_path_rel = post.get("image_path") or ""
+        if not image_path_rel:
+            return ProcessResult(source_path, False, error="missing image_path metadata")
+
+        full_image_path = self.cfg.knowledge.root / image_path_rel
+        if not full_image_path.exists():
+            return ProcessResult(source_path, False, error=f"image file not found: {image_path_rel}")
+
+        try:
+            image_bytes = full_image_path.read_bytes()
+        except OSError as e:
+            return ProcessResult(source_path, False, error=f"cannot read image: {e}")
+
+        try:
+            img_data = compress_image(image_bytes, self.cfg.image)
+        except Exception as e:
+            return ProcessResult(source_path, False, error=f"image compression failed: {e}")
+
+        post["image_original_bytes"] = img_data.original_size
+        post["image_compressed_bytes"] = img_data.compressed_size
+        post["image_width"] = img_data.width
+        post["image_height"] = img_data.height
+        self.store.write_note(source_path, post)
+
+        extracted, llm_err = self._extract_image(img_data, post, source_path)
+        if llm_err:
+            return llm_err
+
+        conf = float(extracted.get("confidence", 0))
+        val_err = self._validate(extracted, conf, post, source_path)
+        if val_err:
+            return val_err
+
+        extra_meta = {k: v for k, v in post.metadata.items()
+                      if k not in STANDARD_SOURCE_FIELDS}
+        topic_body = self._compose_topic_body(
+            summary=extracted["summary"],
+            key_points=extracted["key_points"],
+            narrative=self._link_related(extracted),
+            source_url="",
+        )
+        topic_path = self._write_topic(extracted, conf, source_path, "", extra_meta, topic_body)
+        self._mark_processed(source_path, post, topic_path, extracted)
+
+        logger.info("  -> %s", topic_path.relative_to(self.cfg.knowledge.root))
+        return ProcessResult(source_path, True, topic_path=topic_path)
+
+    def _extract_image(
+        self, img_data: ImageData, post: Any, source_path: Path,
+    ) -> tuple[dict, ProcessResult | None]:
+        """Extract structured data from an image via vision LLM."""
+        existing_categories = [
+            c for c in self.store.existing_categories()
+            if c in self._valid_categories
+        ]
+        caption = post.content.strip() if post.content else ""
+        user_prompt = self._build_image_extract_prompt(
+            title_hint=post.get("title") or "",
+            caption=caption,
+            existing_categories=existing_categories,
+        )
+        vision_model = self.cfg.llm.vision_model or self.cfg.llm.model
+        try:
+            extracted = self.llm.structured_call(
+                tool_name="extract_note",
+                tool_description="把图片内容加工成结构化的知识笔记。",
+                input_schema=self._extract_schema,
+                user_prompt=user_prompt,
+                system=self._extract_system,
+                model=vision_model,
+                images=[img_data],
+            )
+        except Exception as e:
+            logger.exception("LLM image extract failed for %s", source_path)
+            return {}, ProcessResult(source_path, False, error=f"LLM failed: {e}")
+        return extracted, None
 
     def _claim(self, source_path: Path) -> tuple[Any, ProcessResult | None]:
         """Claim file for processing. Returns (post, error_or_none)."""
@@ -318,6 +405,23 @@ class Executor:
         if len(content) > max_chars:
             content = content[:max_chars] + "\n\n[...内容过长已截断...]"
         return f"{header_text}\n\n---\n\n原始素材：\n\n{content}"
+
+    def _build_image_extract_prompt(
+        self,
+        title_hint: str,
+        caption: str,
+        existing_categories: list[str],
+    ) -> str:
+        cats = "、".join(existing_categories) if existing_categories else "（暂无，请新建）"
+        lines = []
+        if title_hint:
+            lines.append(f"原标题：{title_hint}")
+        lines.append(f"现有目录：{cats}")
+        if caption:
+            lines.append(f"附带说明：{caption}")
+        lines.append("")
+        lines.append("请根据图片内容进行笔记提取。")
+        return "\n".join(lines)
 
     def _compose_topic_body(
         self,

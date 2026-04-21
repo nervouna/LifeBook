@@ -17,6 +17,9 @@ llm:
   api_key: ""  # sk-ant-xxx
   model: claude-sonnet-4-5
   digest_model: claude-sonnet-4-5
+  # Vision model for image processing (MiMo-V2-Omni via Anthropic-compatible API).
+  # Leave empty to reuse `model` for images as well.
+  vision_model: ""  # e.g. MiMo-VL-7B-RL
   max_tokens: 4096
   temperature: 0.3
   timeout: 120
@@ -41,3 +44,11 @@ digest:
 logging:
   level: INFO
   retention_days: 30
+
+image:
+  # Maximum long edge in pixels before resizing (default: 1568).
+  max_long_edge: 1568
+  # Maximum compressed image size in bytes sent to the LLM (default: 1 MB).
+  max_bytes: 1048576
+  # JPEG compression quality (1–95). Lowered automatically if max_bytes is exceeded.
+  jpeg_quality: 85

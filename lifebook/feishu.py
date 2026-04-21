@@ -13,7 +13,8 @@ from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 from .config import Config
 from .executor import Executor, ProcessResult
 from .feishu_transport import FeishuTransport
-from .ingest import ingest_text, ingest_url
+from .image_processor import detect_mime_type
+from .ingest import ingest_image, ingest_text, ingest_url
 from .store import NoteStore
 from .writer import Writer
 
@@ -78,6 +79,10 @@ class FeishuBot:
 
         logger.info("received msg_type=%s id=%s chat=%s", msg_type, message_id, chat_id)
 
+        if msg_type == "image":
+            self._handle_image_message(message_id, msg.content)
+            return
+
         if msg_type != "text":
             self.transport.reply_text(message_id, f"[LifeBook] 暂不支持 {msg_type} 类型消息，请发送文字或链接。")
             return
@@ -140,6 +145,41 @@ class FeishuBot:
             self._handle_url_message(message_id, text, urls)
         else:
             self._handle_text_message(message_id, text)
+
+    def _handle_image_message(self, message_id: str, content_json: str) -> None:
+        """Download the image from Feishu and ingest it for processing."""
+        try:
+            content_obj = json.loads(content_json)
+        except Exception:
+            content_obj = {}
+        image_key = content_obj.get("image_key") or ""
+        if not image_key:
+            self.transport.reply_text(message_id, "[LifeBook] 图片消息缺少 image_key，无法下载。")
+            return
+
+        image_bytes = self.transport.download_image_message(message_id, image_key)
+        if not image_bytes:
+            self.transport.reply_text(message_id, "[LifeBook] 图片下载失败，请稍后重试。")
+            return
+
+        try:
+            mime_type = detect_mime_type(image_bytes)
+            p = ingest_image(
+                self.cfg.knowledge,
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+            )
+        except Exception as e:
+            logger.exception("ingest_image failed")
+            self.transport.reply_text(message_id, f"[LifeBook] 图片录入失败：{e}")
+            return
+
+        self.transport.reply_text(message_id, "[LifeBook] 已收到图片，开始加工…")
+        threading.Thread(
+            target=self._process_and_reply,
+            args=(message_id, [p]),
+            daemon=True,
+        ).start()
 
     def _handle_url_message(self, message_id: str, text: str, urls: list[str]) -> None:
         ingested_paths: list[Path] = []

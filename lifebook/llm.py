@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import anthropic
 import httpx
 
 from .config import LLMConfig
+
+if TYPE_CHECKING:
+    from .image_processor import ImageData
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +105,14 @@ class LLMClient:
         model: str | None = None,
         max_tokens: int | None = None,
         max_retries: int = 2,
+        images: list[ImageData] | None = None,
     ) -> dict[str, Any]:
-        """Force the model to produce structured output via tool_use."""
+        """Force the model to produce structured output via tool_use.
+
+        When ``images`` is provided the user message is sent as a multimodal
+        content list (image blocks followed by the text prompt) using the
+        Anthropic base64 image format.
+        """
         tool = _to_anthropic_tool({
             "name": tool_name,
             "description": tool_description,
@@ -111,13 +120,29 @@ class LLMClient:
         })
         last_error: str | None = None
         for attempt in range(max_retries + 1):
+            if images:
+                content: Any = [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": img.media_type,
+                            "data": img.base64_data,
+                        },
+                    }
+                    for img in images
+                ]
+                content.append({"type": "text", "text": user_prompt})
+            else:
+                content = user_prompt
+
             kwargs: dict[str, Any] = {
                 "model": model or self.cfg.model,
                 "max_tokens": max_tokens or self.cfg.max_tokens,
                 "temperature": self.cfg.temperature,
                 "tools": [tool],
                 "tool_choice": {"type": "tool", "name": tool_name},
-                "messages": [{"role": "user", "content": user_prompt}],
+                "messages": [{"role": "user", "content": content}],
             }
             if system:
                 kwargs["system"] = system
