@@ -17,7 +17,7 @@ from lifebook.image_processor import ImageData
 
 @pytest.fixture
 def mock_config(tmp_path):
-    from lifebook.config import DEFAULT_CATEGORIES
+    from lifebook.config import DEFAULT_CATEGORIES, VisionConfig
     sources = tmp_path / "10-sources"
     sources.mkdir()
     (sources / "images").mkdir()
@@ -37,7 +37,7 @@ def mock_config(tmp_path):
     cfg.image = ImageConfig()
     cfg.llm = MagicMock()
     cfg.llm.model = "test-model"
-    cfg.llm.vision_model = "vision-model"
+    cfg.vision = VisionConfig(model="vision-model", base_url="https://vision.api")
     cfg.tavily = MagicMock()
     cfg.fetch = MagicMock()
     return cfg
@@ -86,8 +86,11 @@ def executor(mock_config):
     from lifebook.store import NoteStore
     store = NoteStore(mock_config.knowledge)
     llm = MagicMock()
+    vision_llm = MagicMock()
     fetcher = MagicMock()
-    return Executor(mock_config, store=store, llm=llm, fetcher=fetcher)
+    exec = Executor(mock_config, store=store, llm=llm, fetcher=fetcher)
+    exec.vision_llm = vision_llm
+    return exec
 
 
 def _good_extracted():
@@ -113,12 +116,12 @@ class TestProcessImageFile:
             "img-test.md",
             jpeg,
         )
-        executor.llm.structured_call.return_value = _good_extracted()
+        executor.vision_llm.structured_call.return_value = _good_extracted()
         result = executor.process_file(path)
         assert result.ok
         assert result.topic_path is not None
 
-    def test_uses_vision_model(self, executor, mock_config):
+    def test_uses_vision_llm_client(self, executor, mock_config):
         jpeg = _make_jpeg_bytes()
         path = _write_image_source(
             mock_config.knowledge.sources_path,
@@ -126,10 +129,10 @@ class TestProcessImageFile:
             "img-vision.md",
             jpeg,
         )
-        executor.llm.structured_call.return_value = _good_extracted()
+        executor.vision_llm.structured_call.return_value = _good_extracted()
         executor.process_file(path)
-        call_kwargs = executor.llm.structured_call.call_args.kwargs
-        assert call_kwargs.get("model") == "vision-model"
+        executor.vision_llm.structured_call.assert_called_once()
+        executor.llm.structured_call.assert_not_called()
 
     def test_images_passed_to_llm(self, executor, mock_config):
         jpeg = _make_jpeg_bytes()
@@ -139,9 +142,9 @@ class TestProcessImageFile:
             "img-imgparam.md",
             jpeg,
         )
-        executor.llm.structured_call.return_value = _good_extracted()
+        executor.vision_llm.structured_call.return_value = _good_extracted()
         executor.process_file(path)
-        call_kwargs = executor.llm.structured_call.call_args.kwargs
+        call_kwargs = executor.vision_llm.structured_call.call_args.kwargs
         images = call_kwargs.get("images")
         assert images is not None
         assert len(images) == 1
@@ -189,7 +192,7 @@ class TestProcessImageFile:
         )
         low = _good_extracted()
         low["confidence"] = 0.1
-        executor.llm.structured_call.return_value = low
+        executor.vision_llm.structured_call.return_value = low
         result = executor.process_file(path)
         assert not result.ok
         assert result.skipped_reason is not None
@@ -202,7 +205,7 @@ class TestProcessImageFile:
             "img-llmfail.md",
             jpeg,
         )
-        executor.llm.structured_call.side_effect = RuntimeError("LLM timeout")
+        executor.vision_llm.structured_call.side_effect = RuntimeError("LLM timeout")
         result = executor.process_file(path)
         assert not result.ok
         assert "LLM failed" in result.error
@@ -216,14 +219,19 @@ class TestProcessImageFile:
             jpeg,
             caption="this is my test caption",
         )
-        executor.llm.structured_call.return_value = _good_extracted()
+        executor.vision_llm.structured_call.return_value = _good_extracted()
         executor.process_file(path)
-        call_kwargs = executor.llm.structured_call.call_args.kwargs
+        call_kwargs = executor.vision_llm.structured_call.call_args.kwargs
         assert "test caption" in call_kwargs.get("user_prompt", "")
 
-    def test_fallback_to_default_model_when_vision_model_empty(self, executor, mock_config):
-        mock_config.llm.vision_model = ""
-        mock_config.llm.model = "fallback-model"
+    def test_fallback_to_default_llm_when_vision_not_configured(self, mock_config, tmp_path):
+        from lifebook.store import NoteStore
+        mock_config.vision = None
+        store = NoteStore(mock_config.knowledge)
+        llm = MagicMock()
+        fetcher = MagicMock()
+        executor = Executor(mock_config, store=store, llm=llm, fetcher=fetcher)
+
         jpeg = _make_jpeg_bytes()
         path = _write_image_source(
             mock_config.knowledge.sources_path,
@@ -231,10 +239,10 @@ class TestProcessImageFile:
             "img-fallback.md",
             jpeg,
         )
-        executor.llm.structured_call.return_value = _good_extracted()
+        llm.structured_call.return_value = _good_extracted()
         executor.process_file(path)
-        call_kwargs = executor.llm.structured_call.call_args.kwargs
-        assert call_kwargs.get("model") == "fallback-model"
+        llm.structured_call.assert_called_once()
+        assert executor.vision_llm is None
 
     def test_text_source_still_uses_text_path(self, executor, mock_config):
         path = mock_config.knowledge.sources_path / "text-note.md"

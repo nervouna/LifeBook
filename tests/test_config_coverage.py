@@ -35,7 +35,7 @@ class TestLoadConfig:
         cfg_path = tmp_path / "config.yaml"
         cfg_path.write_text("", encoding="utf-8")
         cfg = load_config(cfg_path)
-        assert cfg.llm.provider == "openai"
+        assert cfg.llm.base_url == "https://api.deepseek.com"
         assert cfg.executor.batch_limit == 20
 
     def test_env_var_config(self, tmp_path: Path, monkeypatch):

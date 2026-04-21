@@ -60,12 +60,21 @@ class KnowledgeConfig:
 
 @dataclass
 class LLMConfig:
-    provider: str = "openai"
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""
     model: str = "deepseek-chat"
     digest_model: str = "deepseek-chat"
-    vision_model: str = ""
+    max_tokens: int = 4096
+    temperature: float = 0.3
+    timeout: int = 120
+    extra_headers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class VisionConfig:
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
     max_tokens: int = 4096
     temperature: float = 0.3
     timeout: int = 120
@@ -133,6 +142,7 @@ class Config:
     fetch: FetchConfig
     logging: LoggingConfig
     image: ImageConfig = field(default_factory=ImageConfig)
+    vision: VisionConfig | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -185,6 +195,8 @@ def load_config(path: Path | str | None = None) -> Config:
     fetch = FetchConfig(**_filter(FetchConfig, raw.get("fetch")))
     logging_cfg = LoggingConfig(**_filter(LoggingConfig, raw.get("logging")))
     image = ImageConfig(**_filter(ImageConfig, raw.get("image")))
+    vision_raw = raw.get("vision")
+    vision = VisionConfig(**_filter(VisionConfig, vision_raw)) if vision_raw else None
 
     return Config(
         knowledge=knowledge,
@@ -196,5 +208,6 @@ def load_config(path: Path | str | None = None) -> Config:
         fetch=fetch,
         logging=logging_cfg,
         image=image,
+        vision=vision,
         raw=raw,
     )

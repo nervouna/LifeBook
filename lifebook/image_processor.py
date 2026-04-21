@@ -16,6 +16,12 @@ _MEDIA_TYPE_MAP = {
     "GIF": "image/gif",
     "WEBP": "image/webp",
 }
+_MIME_TO_EXT = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
 
 
 def detect_mime_type(image_bytes: bytes) -> str:
@@ -32,6 +38,11 @@ def detect_mime_type(image_bytes: bytes) -> str:
         return "image/jpeg"
 
 
+def ext_for_mime(mime_type: str) -> str:
+    """Return file extension for a MIME type."""
+    return _MIME_TO_EXT.get(mime_type.lower(), ".bin")
+
+
 @dataclass
 class ImageData:
     """Preprocessed image ready for LLM multimodal input."""
@@ -45,11 +56,7 @@ class ImageData:
 
 
 def compress_image(image_bytes: bytes, cfg: ImageConfig) -> ImageData:
-    """Resize and compress image bytes; return an ImageData for LLM use.
-
-    Raises ValueError for unsupported formats or images that cannot be
-    compressed below cfg.max_bytes even at the minimum quality (1).
-    """
+    """Resize and compress image bytes; return ImageData for LLM input."""
     original_size = len(image_bytes)
 
     img = Image.open(io.BytesIO(image_bytes))

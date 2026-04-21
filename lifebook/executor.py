@@ -53,6 +53,7 @@ class Executor:
         self.cfg = cfg
         self.store = store or NoteStore(cfg.knowledge)
         self.llm = llm or LLMClient(cfg.llm)
+        self.vision_llm = LLMClient(cfg.vision) if cfg.vision else None
         self.fetcher = fetcher or Fetcher(cfg.tavily, cfg.fetch)
         self._valid_categories: set[str] = set(cfg.knowledge.categories)
         self._extract_schema = build_extract_tool_schema(cfg.knowledge.categories)
@@ -202,15 +203,14 @@ class Executor:
             caption=caption,
             existing_categories=existing_categories,
         )
-        vision_model = self.cfg.llm.vision_model or self.cfg.llm.model
+        llm = self.vision_llm or self.llm
         try:
-            extracted = self.llm.structured_call(
+            extracted = llm.structured_call(
                 tool_name="extract_note",
                 tool_description="把图片内容加工成结构化的知识笔记。",
                 input_schema=self._extract_schema,
                 user_prompt=user_prompt,
                 system=self._extract_system,
-                model=vision_model,
                 images=[img_data],
             )
         except Exception as e:
@@ -413,15 +413,13 @@ class Executor:
         existing_categories: list[str],
     ) -> str:
         cats = "、".join(existing_categories) if existing_categories else "（暂无，请新建）"
-        lines = []
+        parts = [f"现有目录：{cats}"]
         if title_hint:
-            lines.append(f"原标题：{title_hint}")
-        lines.append(f"现有目录：{cats}")
+            parts.insert(0, f"原标题：{title_hint}")
         if caption:
-            lines.append(f"附带说明：{caption}")
-        lines.append("")
-        lines.append("请根据图片内容进行笔记提取。")
-        return "\n".join(lines)
+            parts.append(f"附带说明：{caption}")
+        parts.append("\n请根据图片内容进行笔记提取。")
+        return "\n".join(parts)
 
     def _compose_topic_body(
         self,

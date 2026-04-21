@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from .config import KnowledgeConfig
+from .image_processor import ext_for_mime
 from .notes import new_post, now_iso, now_ts_compact, slugify, unique_path, write_note
 
 
@@ -63,13 +64,8 @@ def ingest_image(
     title_hint: str | None = None,
     caption: str | None = None,
 ) -> Path:
-    """Save image bytes to the images store and create an inbox source record.
-
-    The raw image is written to ``{sources_path}/images/<hash>.<ext>`` and the
-    source note's ``image_path`` metadata field points to that file (relative
-    to ``knowledge.root``).  A SHA-256 content hash is stored for dedup.
-    """
-    ext = _ext_for_mime(mime_type)
+    """Save image bytes to the images store and create an inbox source record."""
+    ext = ext_for_mime(mime_type)
     img_hash = hashlib.sha256(image_bytes).hexdigest()
 
     images_dir = knowledge.sources_path / "images"
@@ -97,12 +93,3 @@ def ingest_image(
     content = caption.strip() if caption else ""
     write_note(note_path, new_post(content, **meta))
     return note_path
-
-
-def _ext_for_mime(mime_type: str) -> str:
-    return {
-        "image/jpeg": ".jpg",
-        "image/png": ".png",
-        "image/gif": ".gif",
-        "image/webp": ".webp",
-    }.get(mime_type.lower(), ".bin")
