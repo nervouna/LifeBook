@@ -11,3 +11,4 @@ logs/
 *.log
 .coverage
 .claude/settings.local.json
+CLAUDE.md
