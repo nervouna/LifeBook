@@ -66,3 +66,13 @@ image:
 #   max_tokens: 4096
 #   temperature: 0.3
 #   timeout: 120
+
+tts:
+  api_key: ""  # minimax api key
+  base_url: https://api.minimaxi.com/v1
+  model: speech-2.8-hd
+  voice_id: Calm_Woman
+  speed: 1.0
+  volume: 1.0
+  format: mp3
+  timeout: 60
