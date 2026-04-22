@@ -1,0 +1,199 @@
+"""Unit tests for podcast.py."""
+from __future__ import annotations
+
+import datetime
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from lifebook.podcast import PodcastGenerator, select_notes
+
+
+@pytest.fixture
+def gen():
+    cfg = MagicMock()
+    cfg.knowledge.root = Path("/tmp/kb")
+    cfg.tts = MagicMock()
+    cfg.tts.voice_id = "mimo_default"
+    llm = MagicMock()
+    tts = MagicMock()
+    return PodcastGenerator(cfg, llm=llm, tts=tts)
+
+
+class TestGenerateScript:
+    def test_calls_llm_with_note_content(self, gen):
+        gen.llm.text_call.return_value = (
+            "早上好呀大毛，（精神满满）今天咱们来聊一个有意思的话题。\n"
+            "说到 AI 最近的发展，（认真）确实让人目不暇接。\n"
+            "好了大毛，今天就聊到这里，我是 Mia，咱们下期见！"
+        )
+        script = gen.generate_script("Title", "Some content about AI")
+        gen.llm.text_call.assert_called_once()
+        assert len(script) == 3
+        assert script[0].speaker == "host"
+        assert "早上好" in script[0].text
+
+    def test_script_returns_segments(self, gen):
+        gen.llm.text_call.return_value = "Hello.\nHi there.\nLet's go."
+        segments = gen.generate_script("Test", "content")
+        assert len(segments) == 3
+        assert segments[0].text == "Hello."
+        assert segments[1].text == "Hi there."
+
+    def test_script_skips_empty_lines(self, gen):
+        gen.llm.text_call.return_value = "Line one.\n\nLine two.\n\nLine three."
+        segments = gen.generate_script("Test", "content")
+        assert len(segments) == 3
+
+    def test_script_strips_whitespace(self, gen):
+        gen.llm.text_call.return_value = "  Hello.  \n  Hi.  "
+        segments = gen.generate_script("Test", "content")
+        assert segments[0].text == "Hello."
+        assert segments[1].text == "Hi."
+
+    def test_script_preserves_parenthetical_descriptions(self, gen):
+        gen.llm.text_call.return_value = "早上好呀，（开心）今天天气不错。"
+        segments = gen.generate_script("Test", "content")
+        assert len(segments) == 1
+        assert "（开心）" in segments[0].text
+
+
+class TestSynthesizeScript:
+    def test_joins_segments_into_single_tts_call(self, gen):
+        from lifebook.podcast import ScriptSegment
+
+        segments = [
+            ScriptSegment(speaker="host", text="Hello."),
+            ScriptSegment(speaker="host", text="Hi."),
+        ]
+        gen.tts.synthesize.return_value = b"audio"
+
+        result = gen.synthesize_script(segments)
+
+        assert result == b"audio"
+        gen.tts.synthesize.assert_called_once_with("Hello.\nHi.")
+
+    def test_single_segment(self, gen):
+        from lifebook.podcast import ScriptSegment
+
+        gen.tts.synthesize.return_value = b"audio"
+        result = gen.synthesize_script([ScriptSegment(speaker="host", text="Hi.")])
+        assert result == b"audio"
+        gen.tts.synthesize.assert_called_once_with("Hi.")
+
+
+class TestGeneratePodcast:
+    def test_full_pipeline(self, gen, tmp_path):
+        note = tmp_path / "note.md"
+        note.write_text(
+            "---\ntitle: AI News\n---\n> summary\n\nContent about AI.\n",
+            encoding="utf-8",
+        )
+
+        gen.llm.text_call.return_value = "早上好大毛。\n（认真）今天聊 AI。\n再见。"
+        gen.tts.synthesize.return_value = b"final_audio"
+
+        audio_bytes, duration = gen.generate(note)
+
+        assert audio_bytes == b"final_audio"
+        gen.tts.synthesize.assert_called_once()
+
+    def test_missing_note_raises(self, gen):
+        with pytest.raises(FileNotFoundError):
+            gen.generate(Path("/nonexistent/note.md"))
+
+
+class TestSelectNotes:
+    def test_select_by_date_and_limit(self, tmp_path):
+        cat = tmp_path / "AI技术"
+        cat.mkdir()
+        # Create notes with different mtimes
+        old_note = cat / "old.md"
+        old_note.write_text("old", encoding="utf-8")
+        import os
+        os.utime(old_note, (1700000000, 1700000000))  # 2023-11-14
+
+        new1 = cat / "new1.md"
+        new1.write_text("new1", encoding="utf-8")
+        new2 = cat / "new2.md"
+        new2.write_text("new2", encoding="utf-8")
+
+        since = datetime.date(2026, 1, 1)
+        selected, total = select_notes(tmp_path, since, limit=10)
+
+        assert total == 2
+        assert old_note not in selected
+        assert new1 in selected
+        assert new2 in selected
+
+    def test_select_respects_limit(self, tmp_path):
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        for i in range(5):
+            (cat / f"n{i}.md").write_text(f"n{i}", encoding="utf-8")
+
+        since = datetime.date(2020, 1, 1)
+        selected, total = select_notes(tmp_path, since, limit=3)
+
+        assert total == 5
+        assert len(selected) == 3
+
+    def test_select_skips_hidden_files(self, tmp_path):
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        (cat / ".hidden.md").write_text("hidden", encoding="utf-8")
+        (cat / "visible.md").write_text("visible", encoding="utf-8")
+
+        since = datetime.date(2020, 1, 1)
+        selected, total = select_notes(tmp_path, since, limit=10)
+
+        assert total == 1
+        assert selected[0].name == "visible.md"
+
+
+class TestGenerateMultiScript:
+    def test_calls_llm_with_combined_content(self, gen, tmp_path):
+        n1 = tmp_path / "note1.md"
+        n1.write_text("---\ntitle: Topic A\n---\nContent A.\n", encoding="utf-8")
+        n2 = tmp_path / "note2.md"
+        n2.write_text("---\ntitle: Topic B\n---\nContent B.\n", encoding="utf-8")
+
+        gen.llm.text_call.return_value = "早上好大毛。\n聊 topic A。\n再聊 topic B。\n再见。"
+        segments = gen.generate_multi_script([n1, n2], has_more=False)
+
+        assert len(segments) == 4
+        gen.llm.text_call.assert_called_once()
+        call_kwargs = gen.llm.text_call.call_args
+        assert "Topic A" in call_kwargs.kwargs.get("user_prompt", call_kwargs[1].get("user_prompt", ""))
+
+    def test_has_more_includes_hint(self, gen, tmp_path):
+        n1 = tmp_path / "note1.md"
+        n1.write_text("---\ntitle: T\n---\nC\n", encoding="utf-8")
+
+        gen.llm.text_call.return_value = "Hi.\nBye."
+        gen.generate_multi_script([n1], has_more=True)
+
+        call_kwargs = gen.llm.text_call.call_args
+        system = call_kwargs.kwargs.get("system", call_kwargs[1].get("system", ""))
+        assert "知识库" in system
+
+
+class TestGenerateMulti:
+    def test_full_pipeline(self, gen, tmp_path):
+        n1 = tmp_path / "a.md"
+        n1.write_text("---\ntitle: A\n---\nContent A.\n", encoding="utf-8")
+        n2 = tmp_path / "b.md"
+        n2.write_text("---\ntitle: B\n---\nContent B.\n", encoding="utf-8")
+
+        gen.llm.text_call.return_value = "Hello.\nWorld."
+        gen.tts.synthesize.return_value = b"merged_audio"
+
+        audio, duration = gen.generate_multi([n1, n2], has_more=False)
+
+        assert audio == b"merged_audio"
+        gen.tts.synthesize.assert_called_once()
+
+    def test_empty_notes_raises(self, gen):
+        with pytest.raises(ValueError, match="No notes"):
+            gen.generate_multi([], has_more=False)
