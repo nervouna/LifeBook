@@ -297,6 +297,8 @@ def doctor(ctx: click.Context) -> None:
     checks.append(("Feishu app_id", bool(cfg.feishu.app_id), cfg.feishu.app_id or "(empty)"))
     checks.append(("Feishu digest chat_id", bool(cfg.feishu.digest_chat_id),
                    cfg.feishu.digest_chat_id or "(empty)"))
+    checks.append(("TTS API key", bool(cfg.tts.api_key), _mask(cfg.tts.api_key)))
+    checks.append(("TTS model", True, f"{cfg.tts.model} ({cfg.tts.voice_id})"))
 
     for name, ok, detail in checks:
         mark = "✓" if ok else "✗"
@@ -340,6 +342,66 @@ def restore_cmd(ctx: click.Context) -> None:
     w = Writer(cfg, LLMClient(cfg.llm))
     result = w.restore_draft()
     click.echo(result)
+
+
+@main.command("podcast")
+@click.argument("note_path", type=click.Path(exists=True))
+@click.option("--output", "-o", type=click.Path(), default=None,
+              help="Save audio to file (default: <note_stem>_podcast.mp3).")
+@click.option("--send", "send_to_feishu", is_flag=True, default=False,
+              help="Send audio to Feishu chat.")
+@click.option("--chat-id", default=None, help="Feishu chat_id for --send.")
+@click.pass_context
+def podcast_cmd(ctx: click.Context, note_path: str, output: str | None,
+                send_to_feishu: bool, chat_id: str | None) -> None:
+    """Generate a podcast episode from a topic note."""
+    from .llm import LLMClient
+    from .podcast import PodcastGenerator
+    from .feishu_transport import FeishuTransport
+
+    cfg = ctx.obj["config"]
+    note = Path(note_path)
+    gen = PodcastGenerator(cfg, llm=LLMClient(cfg.llm))
+
+    click.echo(f"Generating podcast from: {note.name}")
+    audio_bytes, duration = gen.generate(note)
+    click.echo(f"Audio: {len(audio_bytes)} bytes (~{duration}s)")
+
+    if output is None:
+        output = str(note.with_name(f"{note.stem}_podcast.mp3"))
+    Path(output).write_bytes(audio_bytes)
+    click.echo(f"Saved: {output}")
+
+    if send_to_feishu:
+        if not chat_id:
+            chat_id = cfg.feishu.digest_chat_id
+        if not chat_id:
+            click.echo("Error: no chat_id. Use --chat-id or set digest_chat_id in config.")
+            sys.exit(1)
+        transport = FeishuTransport(cfg.feishu)
+        click.echo("Converting to opus for Feishu...")
+        opus_bytes = gen.convert_to_opus(audio_bytes)
+        # Save temp opus to get precise duration
+        opus_tmp = Path(output).with_suffix(".opus")
+        opus_tmp.write_bytes(opus_bytes)
+        opus_duration = gen.get_duration(opus_tmp)
+        click.echo(f"Opus: {len(opus_bytes)} bytes ({opus_duration}s)")
+
+        # Try sending as file first (debug), then as audio
+        file_key = transport.upload_file(
+            opus_bytes, opus_tmp.name,
+            file_type="opus", duration=opus_duration,
+        )
+        opus_tmp.unlink(missing_ok=True)
+        if not file_key:
+            click.echo("Error: file upload failed")
+            sys.exit(1)
+        msg_id = transport.send_audio(chat_id, file_key)
+        if msg_id:
+            click.echo(f"Sent to Feishu: {msg_id}")
+        else:
+            click.echo("Error: send audio failed")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
