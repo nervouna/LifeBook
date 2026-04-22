@@ -1,6 +1,6 @@
 # LifeBook
 
-Personal knowledge base: inbox → LLM extraction → topic notes → vector index.
+Personal knowledge base: inbox → LLM extraction → topic notes → vector index → podcast.
 
 ## Setup
 
@@ -30,10 +30,13 @@ lifebook restore                  # restore draft from backup
 lifebook serve                    # start Feishu bot
 lifebook doctor                   # check config and environment
 lifebook digest                   # generate daily digest
+lifebook podcast NOTE_PATH        # generate podcast from single note
+lifebook podcast NOTE_PATH --send # generate and send to Feishu
+lifebook podcast-multi --since 2026-04-22 --limit 10 --send  # combined episode
 ```
 
 ## Config
 
-See `config.example.yaml`. Required keys: `llm` (API key + model), `knowledge.root`. Optional: `feishu`, `tavily`, `vision`.
+See `config.example.yaml`. Required keys: `llm` (API key + model), `knowledge.root`. Optional: `feishu`, `feishu_podcast`, `tavily`, `vision`, `tts`.
 
 Resolution order: `--config` flag → `LIFEBOOK_CONFIG` env → pointer file → default in knowledge root.
