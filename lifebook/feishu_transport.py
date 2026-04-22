@@ -124,7 +124,7 @@ class FeishuTransport:
             return None
         form_data: dict[str, Any] = {"file_type": file_type, "file_name": file_name}
         if duration is not None:
-            form_data["duration"] = str(duration)
+            form_data["duration"] = str(int(duration * 1000))
         resp = httpx.post(
             "https://open.feishu.cn/open-apis/im/v1/files",
             headers={"Authorization": f"Bearer {token}"},
