@@ -26,6 +26,13 @@ feishu:
   app_secret: ""
   digest_chat_id: ""  # oc_xxx
 
+# Optional: dedicated bot for podcast audio messages.
+# If omitted, the default feishu bot is used.
+# feishu_podcast:
+#   app_id: ""  # cli_xxx
+#   app_secret: ""
+#   podcast_chat_id: ""  # oc_xxx
+
 executor:
   batch_limit: 20
   fetch_timeout: 30
@@ -68,11 +75,11 @@ image:
 #   timeout: 120
 
 tts:
-  api_key: ""  # minimax api key
-  base_url: https://api.minimaxi.com/v1
-  model: speech-2.8-hd
-  voice_id: Calm_Woman
+  api_key: ""  # your-mimo-api-key
+  base_url: https://api.xiaomimimo.com/v1
+  model: mimo-v2.5-tts
+  voice_id: mimo_default
   speed: 1.0
   volume: 1.0
   format: mp3
-  timeout: 60
+  timeout: 180
