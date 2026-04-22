@@ -1,8 +1,8 @@
 """Podcast generator: topic note → script → audio."""
 from __future__ import annotations
 
+import datetime
 import logging
-import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -15,15 +15,54 @@ from .tts import TTSClient
 
 logger = logging.getLogger(__name__)
 
-_SCRIPT_SYSTEM = (
-    "你是一位播客节目编剧。根据提供的知识笔记内容，生成一段双人对话式播客脚本。\n"
-    "格式要求：每行一条对话，格式为 'A: 对话内容' 或 'B: 对话内容'，A 和 B 轮流发言。\n"
-    "风格要求：口语化、有节奏感、自然流畅，像两个朋友聊天一样。\n"
-    "内容要求：覆盖笔记的核心要点，有引子、有展开、有总结。\n"
-    "只输出脚本内容，不要加任何标题、说明或编号。"
+
+def select_notes(
+    topics_path: Path, since: datetime.date, limit: int = 10
+) -> tuple[list[Path], int]:
+    """Select recent notes by modification date.
+
+    Returns (selected_paths, total_matching_count).
+    """
+    candidates: list[tuple[float, Path]] = []
+    for p in topics_path.rglob("*.md"):
+        if p.name.startswith("."):
+            continue
+        st = p.stat()
+        if datetime.date.fromtimestamp(st.st_mtime) >= since:
+            candidates.append((st.st_mtime, p))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    total = len(candidates)
+    selected = [p for _, p in candidates[:limit]]
+    return selected, total
+
+_SCRIPT_BASE = (
+    "你是一位叫 Mia 的播客节目主持人，你的听众叫大毛。\n"
+    "这是单人独白，不是对话。禁止出现 A:、B:、甲:、乙: 或任何形式的对话格式。\n"
+    "格式要求：每行一句口播稿，直接输出文字，不要加说话人前缀。\n"
+    "风格要求：口语化、有节奏感、自然流畅，像在跟大毛聊天。偶尔称呼大毛来拉近距离。\n"
+    "在适当的地方用括号加入语气或动作描述，例如：（偷笑）（认真）（停顿）（叹气）。\n"
+    "不要每句都加，只在关键转折或情绪变化时使用。\n"
 )
 
-_SEGMENT_RE = re.compile(r"^(A|B)\s*[:：]\s*(.+)$")
+_SCRIPT_SYSTEM = (
+    _SCRIPT_BASE
+    + "根据提供的知识笔记内容，生成一段单人播客脚本。\n"
+    + "开头要有简短的问候和引入，例如：早上好呀大毛，（精神满满）今天咱们来聊一个有意思的话题。\n"
+    + "内容要求：覆盖笔记的核心要点，有引子、有展开、有总结。\n"
+    + "结尾用 Mia 的身份告别，例如：好了大毛，今天就聊到这里，我是 Mia，咱们下期见！\n"
+    + "只输出脚本内容，不要加任何标题、说明或编号。"
+)
+
+_SCRIPT_SYSTEM_MULTI = (
+    _SCRIPT_BASE
+    + "根据提供的多篇知识笔记内容，生成一段单人播客脚本。\n"
+    + "开头要有简短的问候和引入，例如：早上好呀大毛，（精神满满）今天咱们来聊聊最近发生的几件有意思的事。\n"
+    + "内容要求：覆盖每篇笔记的核心要点，话题之间自然过渡，有引子、有展开、有总结。\n"
+    + "结尾用 Mia 的身份告别。\n"
+    + "{has_more_hint}"
+    + "只输出脚本内容，不要加任何标题、说明或编号。"
+)
 
 
 @dataclass
@@ -39,7 +78,7 @@ class PodcastGenerator:
         self.tts = tts or TTSClient(cfg.tts)
 
     def generate_script(self, title: str, content: str) -> list[ScriptSegment]:
-        """Generate podcast dialogue script from note content."""
+        """Generate podcast monologue script from note content."""
         prompt = f"标题：{title}\n\n{content}"
         raw = self.llm.text_call(user_prompt=prompt, system=_SCRIPT_SYSTEM)
         segments: list[ScriptSegment] = []
@@ -47,18 +86,41 @@ class PodcastGenerator:
             line = line.strip()
             if not line:
                 continue
-            m = _SEGMENT_RE.match(line)
-            if m:
-                segments.append(ScriptSegment(speaker=m.group(1), text=m.group(2).strip()))
+            segments.append(ScriptSegment(speaker="host", text=line))
         return segments
 
-    def synthesize_segments(self, segments: list[ScriptSegment]) -> list[bytes]:
-        """Synthesize each script segment to audio bytes."""
-        audio_parts: list[bytes] = []
-        for seg in segments:
-            audio = self.tts.synthesize(seg.text)
-            audio_parts.append(audio)
-        return audio_parts
+    def generate_multi_script(
+        self, notes: list[Path], has_more: bool
+    ) -> list[ScriptSegment]:
+        """Generate a combined podcast script from multiple notes."""
+        parts: list[str] = []
+        for p in notes:
+            post = frontmatter.loads(p.read_text(encoding="utf-8"))
+            title = post.get("title", p.stem)
+            content = post.content.strip()[:800]
+            parts.append(f"## {title}\n{content}")
+
+        prompt = "\n\n".join(parts)
+        has_more_hint = (
+            "在结尾处自然地提到还有更多有趣的内容，建议大毛有空去知识库看看。\n"
+            if has_more
+            else ""
+        )
+        system = _SCRIPT_SYSTEM_MULTI.format(has_more_hint=has_more_hint)
+
+        raw = self.llm.text_call(user_prompt=prompt, system=system)
+        segments: list[ScriptSegment] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            segments.append(ScriptSegment(speaker="host", text=line))
+        return segments
+
+    def synthesize_script(self, segments: list[ScriptSegment]) -> bytes:
+        """Synthesize full script as a single TTS call."""
+        full_text = "\n".join(seg.text for seg in segments)
+        return self.tts.synthesize(full_text)
 
     def get_duration(self, audio_path: Path) -> int:
         """Get duration in seconds via ffprobe."""
@@ -86,32 +148,8 @@ class PodcastGenerator:
             src_path.unlink(missing_ok=True)
             dst_path.unlink(missing_ok=True)
 
-    def concatenate_audio(self, audio_files: list[Path]) -> bytes:
-        """Concatenate multiple audio files into one. Returns merged bytes."""
-        if len(audio_files) == 1:
-            return audio_files[0].read_bytes()
-
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            output_path = Path(tmp.name)
-
-        list_file = output_path.with_suffix(".txt")
-        list_file.write_text(
-            "\n".join(f"file '{f}'" for f in audio_files), encoding="utf-8"
-        )
-
-        try:
-            subprocess.run(
-                ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                 "-i", str(list_file), "-c", "copy", str(output_path)],
-                capture_output=True, check=True,
-            )
-            return output_path.read_bytes()
-        finally:
-            list_file.unlink(missing_ok=True)
-            output_path.unlink(missing_ok=True)
-
     def generate(self, note_path: Path) -> tuple[bytes, int]:
-        """Full pipeline: note → script → TTS → concatenated audio.
+        """Full pipeline: note → script → TTS.
 
         Returns (audio_bytes, duration_seconds_estimate).
         """
@@ -126,19 +164,21 @@ class PodcastGenerator:
         if not segments:
             raise ValueError("LLM produced no valid script segments")
 
-        audio_parts = self.synthesize_segments(segments)
+        audio_bytes = self.synthesize_script(segments)
+        duration = max(1, len(audio_bytes) // 16000)
+        return audio_bytes, duration
 
-        temp_files: list[Path] = []
-        try:
-            for i, audio in enumerate(audio_parts):
-                p = note_path.parent / f".podcast_tmp_{i}.mp3"
-                p.write_bytes(audio)
-                temp_files.append(p)
-            merged = self.concatenate_audio(temp_files)
-        finally:
-            for p in temp_files:
-                p.unlink(missing_ok=True)
+    def generate_multi(
+        self, note_paths: list[Path], has_more: bool
+    ) -> tuple[bytes, int]:
+        """Full pipeline: multiple notes → script → TTS."""
+        if not note_paths:
+            raise ValueError("No notes provided")
 
-        # Rough estimate: ~16KB per second at 128kbps mp3
-        duration = max(1, len(merged) // 16000)
-        return merged, duration
+        segments = self.generate_multi_script(note_paths, has_more)
+        if not segments:
+            raise ValueError("LLM produced no valid script segments")
+
+        audio_bytes = self.synthesize_script(segments)
+        duration = max(1, len(audio_bytes) // 16000)
+        return audio_bytes, duration

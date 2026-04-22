@@ -93,6 +93,7 @@ class FeishuConfig:
     app_id: str = ""
     app_secret: str = ""
     digest_chat_id: str = ""
+    podcast_chat_id: str = ""
 
 
 @dataclass
@@ -120,13 +121,13 @@ class TavilyConfig:
 @dataclass
 class TTSConfig:
     api_key: str = ""
-    base_url: str = "https://api.minimaxi.com/v1"
-    model: str = "speech-2.8-hd"
-    voice_id: str = "Calm_Woman"
+    base_url: str = "https://api.xiaomimimo.com/v1"
+    model: str = "mimo-v2.5-tts"
+    voice_id: str = "mimo_default"
     speed: float = 1.0
     volume: float = 1.0
     format: str = "mp3"
-    timeout: int = 60
+    timeout: int = 180
 
 
 @dataclass
@@ -156,6 +157,7 @@ class Config:
     image: ImageConfig = field(default_factory=ImageConfig)
     vision: VisionConfig | None = None
     tts: TTSConfig = field(default_factory=TTSConfig)
+    feishu_podcast: FeishuConfig | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -211,6 +213,8 @@ def load_config(path: Path | str | None = None) -> Config:
     vision_raw = raw.get("vision")
     vision = VisionConfig(**_filter(VisionConfig, vision_raw)) if vision_raw else None
     tts = TTSConfig(**_filter(TTSConfig, raw.get("tts")))
+    fp_raw = raw.get("feishu_podcast")
+    feishu_podcast = FeishuConfig(**_filter(FeishuConfig, fp_raw)) if fp_raw else None
 
     return Config(
         knowledge=knowledge,
@@ -224,5 +228,6 @@ def load_config(path: Path | str | None = None) -> Config:
         image=image,
         vision=vision,
         tts=tts,
+        feishu_podcast=feishu_podcast,
         raw=raw,
     )

@@ -55,7 +55,7 @@ class TestUploadAudio:
 
         call_kwargs = mock_post.call_args.kwargs
         assert call_kwargs["data"]["file_type"] == "opus"
-        assert call_kwargs["data"]["duration"] == "60"
+        assert call_kwargs["data"]["duration"] == "60000"
         assert "file" in call_kwargs["files"]
 
     def test_upload_without_duration(self, transport):
