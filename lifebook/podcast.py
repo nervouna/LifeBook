@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from typing import Any
 
 import frontmatter
 
-from .tts import TTSClient
+from .tts import TTSClient, TTSError
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ _SCRIPT_SYSTEM = (
     + "根据提供的知识笔记内容，生成一段单人播客脚本。\n"
     + "开头要有简短的问候和引入，例如：早上好呀大毛，（精神满满）今天咱们来聊一个有意思的话题。\n"
     + "内容要求：覆盖笔记的核心要点，有引子、有展开、有总结。\n"
+    + "涉及出口管制、地缘政治、军事、制裁等敏感话题时，用中性技术视角表述，聚焦产业影响和技术细节，避免情绪化用词。\n"
+    + "段落之间加入（短暂停顿，轻轻吸气）作为自然过渡，但不要在开头问候后使用。\n"
     + "结尾用 Mia 的身份告别，例如：好了大毛，今天就聊到这里，我是 Mia，咱们下期见！\n"
     + "只输出脚本内容，不要加任何标题、说明或编号。"
 )
@@ -59,6 +62,8 @@ _SCRIPT_SYSTEM_MULTI = (
     + "根据提供的多篇知识笔记内容，生成一段单人播客脚本。\n"
     + "开头要有简短的问候和引入，例如：早上好呀大毛，（精神满满）今天咱们来聊聊最近发生的几件有意思的事。\n"
     + "内容要求：覆盖每篇笔记的核心要点，话题之间自然过渡，有引子、有展开、有总结。\n"
+    + "涉及出口管制、地缘政治、军事、制裁等敏感话题时，用中性技术视角表述，聚焦产业影响和技术细节，避免情绪化用词。\n"
+    + "每个新话题的第一句前加入（短暂停顿，轻轻吸气）作为自然过渡，但不要在开头问候后使用。\n"
     + "结尾用 Mia 的身份告别。\n"
     + "{has_more_hint}"
     + "只输出脚本内容，不要加任何标题、说明或编号。"
@@ -118,9 +123,43 @@ class PodcastGenerator:
         return segments
 
     def synthesize_script(self, segments: list[ScriptSegment]) -> bytes:
-        """Synthesize full script as a single TTS call."""
-        full_text = "\n".join(seg.text for seg in segments)
-        return self.tts.synthesize(full_text)
+        """Synthesize each segment independently, skip content-filtered ones, concat."""
+        parts: list[bytes] = []
+        for i, seg in enumerate(segments):
+            try:
+                audio = self.tts.synthesize(seg.text)
+                parts.append(audio)
+            except TTSError as e:
+                logger.warning("Segment %d skipped: %s", i, e)
+                continue
+        if not parts:
+            raise TTSError("All segments failed TTS synthesis")
+        if len(parts) == 1:
+            return parts[0]
+        return self._concat_audio(parts)
+
+    def _concat_audio(self, parts: list[bytes]) -> bytes:
+        """Concat mp3 byte segments via ffmpeg concat demuxer."""
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            paths: list[Path] = []
+            for i, audio in enumerate(parts):
+                p = Path(tmp_dir) / f"seg_{i}.mp3"
+                p.write_bytes(audio)
+                paths.append(p)
+            list_file = Path(tmp_dir) / "list.txt"
+            list_file.write_text(
+                "\n".join(f"file '{p}'" for p in paths), encoding="utf-8"
+            )
+            output = Path(tmp_dir) / "out.mp3"
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                 "-i", str(list_file), "-c", "copy", str(output)],
+                capture_output=True, check=True,
+            )
+            return output.read_bytes()
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def get_duration(self, audio_path: Path) -> int:
         """Get duration in seconds via ffprobe."""

@@ -7,7 +7,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lifebook.podcast import PodcastGenerator, select_notes
+from lifebook.podcast import PodcastGenerator, ScriptSegment, TTSError, select_notes
+
+
+def _mock_path(p: str, read_bytes: bytes = b"") -> MagicMock:
+    m = MagicMock()
+    m.write_bytes = MagicMock()
+    m.write_text = MagicMock()
+    m.read_bytes.return_value = read_bytes
+    m.__str__ = lambda self: p
+    return m
 
 
 @pytest.fixture
@@ -60,27 +69,72 @@ class TestGenerateScript:
 
 
 class TestSynthesizeScript:
-    def test_joins_segments_into_single_tts_call(self, gen):
-        from lifebook.podcast import ScriptSegment
-
+    def test_synthesizes_each_segment_independently(self, gen):
         segments = [
             ScriptSegment(speaker="host", text="Hello."),
             ScriptSegment(speaker="host", text="Hi."),
         ]
-        gen.tts.synthesize.return_value = b"audio"
+        gen.tts.synthesize.side_effect = [b"audio1", b"audio2"]
+        gen._concat_audio = MagicMock(return_value=b"merged")
 
         result = gen.synthesize_script(segments)
 
-        assert result == b"audio"
-        gen.tts.synthesize.assert_called_once_with("Hello.\nHi.")
+        assert result == b"merged"
+        assert gen.tts.synthesize.call_count == 2
+        gen.tts.synthesize.assert_any_call("Hello.")
+        gen.tts.synthesize.assert_any_call("Hi.")
+        gen._concat_audio.assert_called_once_with([b"audio1", b"audio2"])
 
-    def test_single_segment(self, gen):
-        from lifebook.podcast import ScriptSegment
-
+    def test_single_segment_skips_concat(self, gen):
         gen.tts.synthesize.return_value = b"audio"
         result = gen.synthesize_script([ScriptSegment(speaker="host", text="Hi.")])
         assert result == b"audio"
         gen.tts.synthesize.assert_called_once_with("Hi.")
+
+    def test_skips_content_filtered_segments(self, gen):
+        segments = [
+            ScriptSegment(speaker="host", text="Good segment."),
+            ScriptSegment(speaker="host", text="Bad segment."),
+            ScriptSegment(speaker="host", text="Another good one."),
+        ]
+        gen.tts.synthesize.side_effect = [b"audio1", TTSError("content_filter"), b"audio2"]
+        gen._concat_audio = MagicMock(return_value=b"merged")
+
+        result = gen.synthesize_script(segments)
+
+        assert result == b"merged"
+        assert gen.tts.synthesize.call_count == 3
+        gen._concat_audio.assert_called_once_with([b"audio1", b"audio2"])
+
+    def test_all_segments_fail_raises(self, gen):
+        segments = [
+            ScriptSegment(speaker="host", text="Bad 1."),
+            ScriptSegment(speaker="host", text="Bad 2."),
+        ]
+        gen.tts.synthesize.side_effect = TTSError("content_filter")
+
+        with pytest.raises(TTSError, match="All segments failed"):
+            gen.synthesize_script(segments)
+
+
+class TestConcatAudio:
+    def test_concats_via_ffmpeg(self, gen, tmp_path):
+        out_file = tmp_path / "out.mp3"
+        out_file.write_bytes(b"merged")
+
+        def fake_subprocess(*args, **kwargs):
+            cmd = args[0]
+            if "-c" in cmd and "copy" in cmd:
+                idx = cmd.index("-c")
+                out_arg = cmd[idx + 2]
+                Path(out_arg).write_bytes(b"merged")
+            return MagicMock()
+
+        with patch("lifebook.podcast.subprocess.run", side_effect=fake_subprocess), \
+             patch("lifebook.podcast.tempfile.mkdtemp", return_value=str(tmp_path)):
+            result = gen._concat_audio([b"a", b"b"])
+
+        assert result == b"merged"
 
 
 class TestGeneratePodcast:
@@ -92,12 +146,13 @@ class TestGeneratePodcast:
         )
 
         gen.llm.text_call.return_value = "早上好大毛。\n（认真）今天聊 AI。\n再见。"
-        gen.tts.synthesize.return_value = b"final_audio"
+        gen.tts.synthesize.return_value = b"fake_mp3"
+        gen._concat_audio = MagicMock(return_value=b"merged")
 
         audio_bytes, duration = gen.generate(note)
 
-        assert audio_bytes == b"final_audio"
-        gen.tts.synthesize.assert_called_once()
+        assert audio_bytes == b"merged"
+        assert gen.tts.synthesize.call_count == 3
 
     def test_missing_note_raises(self, gen):
         with pytest.raises(FileNotFoundError):
@@ -187,12 +242,13 @@ class TestGenerateMulti:
         n2.write_text("---\ntitle: B\n---\nContent B.\n", encoding="utf-8")
 
         gen.llm.text_call.return_value = "Hello.\nWorld."
-        gen.tts.synthesize.return_value = b"merged_audio"
+        gen.tts.synthesize.return_value = b"fake_mp3"
+        gen._concat_audio = MagicMock(return_value=b"merged")
 
         audio, duration = gen.generate_multi([n1, n2], has_more=False)
 
-        assert audio == b"merged_audio"
-        gen.tts.synthesize.assert_called_once()
+        assert audio == b"merged"
+        assert gen.tts.synthesize.call_count == 2
 
     def test_empty_notes_raises(self, gen):
         with pytest.raises(ValueError, match="No notes"):
