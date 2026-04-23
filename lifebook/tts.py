@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 
 import httpx
 
 from .config import TTSConfig
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
 
 
 class TTSError(Exception):
@@ -20,7 +23,7 @@ class TTSClient:
         self.cfg = cfg
 
     def synthesize(self, text: str) -> bytes:
-        """Convert text to audio bytes (mp3)."""
+        """Convert text to audio bytes (mp3). Retries on 5xx with exponential backoff."""
         if not text or not text.strip():
             raise ValueError("empty text")
 
@@ -41,22 +44,34 @@ class TTSClient:
             "stream": False,
         }
 
-        with httpx.Client(timeout=self.cfg.timeout) as http:
-            resp = http.post(url, headers=headers, json=payload)
+        for attempt in range(1 + MAX_RETRIES):
+            with httpx.Client(timeout=self.cfg.timeout) as http:
+                resp = http.post(url, headers=headers, json=payload)
 
-        if resp.status_code != 200:
-            raise TTSError(f"TTS HTTP {resp.status_code}: {resp.text[:200]}")
+            if resp.status_code >= 500 and attempt < MAX_RETRIES:
+                wait = 2 ** attempt
+                logger.warning(
+                    "TTS HTTP %d (attempt %d/%d), retrying in %ds",
+                    resp.status_code, attempt + 1, 1 + MAX_RETRIES, wait,
+                )
+                time.sleep(wait)
+                continue
 
-        data = resp.json()
+            if resp.status_code != 200:
+                raise TTSError(f"TTS HTTP {resp.status_code}: {resp.text[:200]}")
 
-        audio_data = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("audio", {})
-            .get("data")
-        )
-        if not audio_data:
-            logger.error("TTS API response: %s", data)
-            raise TTSError("TTS response contains no audio data")
+            data = resp.json()
 
-        return base64.b64decode(audio_data)
+            audio_data = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("audio", {})
+                .get("data")
+            )
+            if not audio_data:
+                logger.error("TTS API response: %s", data)
+                raise TTSError("TTS response contains no audio data")
+
+            return base64.b64decode(audio_data)
+
+        raise TTSError("TTS retries exhausted")

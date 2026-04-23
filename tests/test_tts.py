@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -168,3 +169,110 @@ class TestTTSClient:
         headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
         assert headers["api-key"] == "test-key"
         assert "Authorization" not in headers
+
+
+class TestTTSRetry:
+    def test_retries_on_500_then_succeeds(self, client):
+        fail_resp = MagicMock()
+        fail_resp.status_code = 500
+        fail_resp.text = "Internal Server Error"
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.json.return_value = _mimo_response(b"\x00\x01")
+
+        with patch("lifebook.tts.httpx.Client") as mock_cls, \
+             patch("lifebook.tts.time.sleep") as mock_sleep:
+            mock_post = MagicMock(side_effect=[fail_resp, ok_resp])
+            mock_cls.return_value.__enter__ = MagicMock(
+                return_value=MagicMock(post=mock_post)
+            )
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            result = client.synthesize("Hello")
+
+        assert result == b"\x00\x01"
+        assert mock_post.call_count == 2
+        mock_sleep.assert_called_once_with(1)
+
+    def test_retries_on_502_then_succeeds(self, client):
+        fail_resp = MagicMock()
+        fail_resp.status_code = 502
+        fail_resp.text = "Bad Gateway"
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.json.return_value = _mimo_response(b"\x00\x01")
+
+        with patch("lifebook.tts.httpx.Client") as mock_cls, \
+             patch("lifebook.tts.time.sleep") as mock_sleep:
+            mock_post = MagicMock(side_effect=[fail_resp, ok_resp])
+            mock_cls.return_value.__enter__ = MagicMock(
+                return_value=MagicMock(post=mock_post)
+            )
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            result = client.synthesize("Hello")
+
+        assert result == b"\x00\x01"
+        mock_sleep.assert_called_once_with(1)
+
+    def test_exponential_backoff_timing(self, client):
+        fail_resp = MagicMock()
+        fail_resp.status_code = 503
+        fail_resp.text = "Service Unavailable"
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.json.return_value = _mimo_response(b"\x00\x01")
+
+        with patch("lifebook.tts.httpx.Client") as mock_cls, \
+             patch("lifebook.tts.time.sleep") as mock_sleep:
+            mock_post = MagicMock(side_effect=[fail_resp, fail_resp, ok_resp])
+            mock_cls.return_value.__enter__ = MagicMock(
+                return_value=MagicMock(post=mock_post)
+            )
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            result = client.synthesize("Hello")
+
+        assert result == b"\x00\x01"
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(1)
+        mock_sleep.assert_any_call(2)
+
+    def test_no_retry_on_4xx(self, client):
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.text = "Bad Request"
+
+        with patch("lifebook.tts.httpx.Client") as mock_cls, \
+             patch("lifebook.tts.time.sleep") as mock_sleep:
+            mock_post = MagicMock(return_value=resp)
+            mock_cls.return_value.__enter__ = MagicMock(
+                return_value=MagicMock(post=mock_post)
+            )
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            with pytest.raises(TTSError, match="400"):
+                client.synthesize("Hello")
+
+        assert mock_post.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_raises_after_max_retries(self, client):
+        fail_resp = MagicMock()
+        fail_resp.status_code = 500
+        fail_resp.text = "Internal Server Error"
+
+        with patch("lifebook.tts.httpx.Client") as mock_cls, \
+             patch("lifebook.tts.time.sleep") as mock_sleep:
+            mock_post = MagicMock(return_value=fail_resp)
+            mock_cls.return_value.__enter__ = MagicMock(
+                return_value=MagicMock(post=mock_post)
+            )
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            with pytest.raises(TTSError, match="500"):
+                client.synthesize("Hello")
+
+        assert mock_post.call_count == 4  # 1 initial + 3 retries
+        assert mock_sleep.call_count == 3
+        mock_sleep.assert_any_call(1)
+        mock_sleep.assert_any_call(2)
+        mock_sleep.assert_any_call(4)
