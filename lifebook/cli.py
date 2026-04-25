@@ -236,7 +236,7 @@ def search(ctx: click.Context, query: str, limit: int) -> None:
     from .vector import VectorIndex
     cfg = ctx.obj["config"]
 
-    persist_dir = cfg.knowledge.state_path / "vector_store"
+    persist_dir = cfg.knowledge.vector_store_path
     vector = VectorIndex(persist_dir)
     results = vector.search(query, n_results=limit)
 

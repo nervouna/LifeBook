@@ -34,7 +34,7 @@ class Indexer:
         # Paths
         self.topics_path = cfg.knowledge.topics_path
         self.meta_path = cfg.knowledge.state_path / self.META_FILENAME
-        self.persist_dir = cfg.knowledge.state_path / "vector_store"
+        self.persist_dir = cfg.knowledge.vector_store_path
 
         # Lazy-init vector index (heavy: loads model)
         self._index: VectorIndex | None = None

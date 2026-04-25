@@ -3,16 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-_CATEGORIES = [
-    "AI技术",
-    "开发者工具",
-    "半导体",
-    "消费电子",
-    "媒体生态",
-    "组织与劳动",
-    "科技监管",
-    "经济与产业",
-]
+from ..config import DEFAULT_CATEGORIES
 
 EXTRACT_TOOL_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -50,7 +41,7 @@ EXTRACT_TOOL_SCHEMA: dict[str, Any] = {
         },
         "category": {
             "type": "string",
-            "enum": _CATEGORIES,
+            "enum": DEFAULT_CATEGORIES,
             "description": (
                 "归档目录名，必须严格从枚举值中选一个。唯一维度是**主题领域/行业/学科**。"
                 "边界优先级（遇到模糊主题时按此决策）："
@@ -83,7 +74,7 @@ EXTRACT_TOOL_SCHEMA: dict[str, Any] = {
         },
         "alt_category": {
             "type": "string",
-            "enum": _CATEGORIES,
+            "enum": DEFAULT_CATEGORIES,
             "description": (
                 "第二候选分类。当 confidence < 0.8 时必须提供，表示你认为"
                 "第二可能的分类。confidence >= 0.8 时可省略。"
@@ -98,8 +89,7 @@ EXTRACT_TOOL_SCHEMA: dict[str, Any] = {
 EXTRACT_SYSTEM = """你是一位严谨的知识库编辑。你的任务是把一篇原始素材加工成结构化的主题笔记。
 
 分类与标签的分野（重要）：
-- category 固定为 8 选一的枚举：AI技术、开发者工具、半导体、消费电子、
-  媒体生态、组织与劳动、科技监管、经济与产业。必须严格从这个列表里选一个，
+- category 固定为 {cat_count} 选一的枚举：{cat_list}。必须严格从这个列表里选一个，
   不得新建、不得改名、不得合并。
 - 边界优先级（遇到模糊主题时按此决策）：
   * AI 公司商业新闻（融资/高管变动/定价策略/商业模式/订阅模式/封号风波）
@@ -188,7 +178,5 @@ def build_extract_tool_schema(categories: list[str]) -> dict[str, Any]:
 def build_extract_system(categories: list[str]) -> str:
     """Build EXTRACT_SYSTEM with a dynamic category list."""
     cat_list = "、".join(categories)
-    return EXTRACT_SYSTEM.replace(
-        "AI技术、开发者工具、半导体、消费电子、\n  媒体生态、组织与劳动、科技监管、经济与产业",
-        cat_list,
-    )
+    cat_count = len(categories)
+    return EXTRACT_SYSTEM.format(cat_list=cat_list, cat_count=cat_count)
