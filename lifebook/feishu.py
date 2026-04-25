@@ -312,18 +312,14 @@ class FeishuBot:
             upserted = stats.get("upserted", 0)
             deleted = stats.get("deleted", 0)
             unchanged = stats.get("unchanged", 0)
-            errors = stats.get("errors", [])
+            errors = stats.get("errors", 0)
 
             reply = f"[LifeBook] 向量索引更新完成\n"
             reply += f"  新增/更新: {upserted}\n"
             reply += f"  删除: {deleted}\n"
             reply += f"  未变化: {unchanged}\n"
             if errors:
-                reply += f"  错误: {len(errors)} 个\n"
-                for err in errors[:3]:
-                    reply += f"    - {err}\n"
-                if len(errors) > 3:
-                    reply += f"    ... 还有 {len(errors) - 3} 个错误\n"
+                reply += f"  错误: {errors} 个\n"
 
         except Exception as e:
             logger.exception("update-index failed")

@@ -451,7 +451,7 @@ class TestRunCommands:
         mock_indexer_inst = MagicMock()
         mock_indexer_inst.incremental_update.return_value = {
             "upserted": 3, "deleted": 1, "unchanged": 5,
-            "errors": ["e1", "e2", "e3", "e4"],
+            "errors": 4,
         }
         with patch.dict(sys.modules, {
             "chromadb": MagicMock(), "chromadb.config": MagicMock(),

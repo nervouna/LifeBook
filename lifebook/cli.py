@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from .config import load_config, POINTER_FILE, DEFAULT_CONFIG_PATH, resolve_config_path, KnowledgeConfig
+from .config import load_config, POINTER_FILE, resolve_config_path, KnowledgeConfig
 
 
 @click.group()
@@ -217,19 +217,14 @@ def index(ctx: click.Context, full: bool, interval: int | None) -> None:
     upserted = stats.get("upserted", 0)
     deleted = stats.get("deleted", 0)
     unchanged = stats.get("unchanged", 0)
-    errors = stats.get("errors", [])
-    
+    errors = stats.get("errors", 0)
+
     click.echo(f"\nIndex update complete:")
     click.echo(f"  Upserted: {upserted}")
     click.echo(f"  Deleted:  {deleted}")
     click.echo(f"  Unchanged: {unchanged}")
-    
     if errors:
-        click.echo(f"  Errors: {len(errors)}")
-        for err in errors[:5]:
-            click.echo(f"    - {err}")
-        if len(errors) > 5:
-            click.echo(f"    ... and {len(errors) - 5} more")
+        click.echo(f"  Errors: {errors}")
 
 
 @main.command()

@@ -278,15 +278,5 @@ class NoteStore:
 
     def write_note(self, path: Path, post: frontmatter.Post) -> None:
         write_note(path, post)
-        # Invalidate cache only if writing to topics directory
-        try:
-            if path.is_relative_to(self.cfg.topics_path):
-                self._invalidate_topic_cache()
-        except (AttributeError, ValueError):
-            # Fallback for older Python versions or relative path issues
-            # If path starts with topics_path, invalidate
-            try:
-                path.relative_to(self.cfg.topics_path)
-                self._invalidate_topic_cache()
-            except ValueError:
-                pass
+        if path.is_relative_to(self.cfg.topics_path):
+            self._invalidate_topic_cache()
