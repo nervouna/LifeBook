@@ -1,10 +1,10 @@
 """End-to-end tests for the Writer writing flow with mocked LLM but real file I/O."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import frontmatter
 import pytest
 
 from lifebook.config import (
@@ -150,25 +150,24 @@ class TestFullWritingFlow:
         assert "核心概念" in result
         assert "测试主题" in result
         assert w.draft_path.exists()
-        draft = read_note(w.draft_path)
-        assert draft.get("stage") == STAGE_CONCEPT
-        assert "测试主题" in draft.content
+        meta, content = w._load_draft()
+        assert meta["stage"] == STAGE_CONCEPT
+        assert "测试主题" in meta["title"]
 
         # Step 2: User confirms concept → framework stage
         result = w.handle_message("确认，概念很好")
         assert w.stage == STAGE_FRAMEWORK
         assert "方案" in result
-        draft = read_note(w.draft_path)
-        assert draft.get("stage") == STAGE_FRAMEWORK
-        assert "框架" in draft.content
+        meta, content = w._load_draft()
+        assert meta["stage"] == STAGE_FRAMEWORK
 
         # Step 3: User picks framework → content stage, draft has 正文
         result = w.handle_message("选方案1")
         assert w.stage == STAGE_CONTENT
         assert "引言" in result
-        draft = read_note(w.draft_path)
-        assert draft.get("stage") == STAGE_CONTENT
-        assert "正文" in draft.content
+        meta, content = w._load_draft()
+        assert meta["stage"] == STAGE_CONTENT
+        assert "引言" in content
 
         # Step 4a: Discussion round 1
         result = w.handle_message("请修改引言部分")
@@ -233,20 +232,20 @@ class TestEdgeCases:
         assert w.active
 
     def test_restart_recovery(self, tmp_path):
-        """Create a draft.md manually, verify Writer picks it up."""
+        """Create draft.json + draft.md manually, verify Writer picks it up."""
         cfg = make_cfg(tmp_path)
         llm = MagicMock()
 
-        # Manually create a draft at content stage
-        draft_path = cfg.knowledge.publish_path / "draft.md"
-        post = new_post(
-            "## 核心概念\n\n概念内容\n\n## 框架\n\n框架内容\n\n## 正文\n\n正文内容\n",
-            title="手动草稿",
-            stage=STAGE_CONTENT,
-            created="2024-01-01T00:00:00",
-            updated="2024-01-01T00:00:00",
-        )
-        write_note(draft_path, post)
+        publish_dir = cfg.knowledge.publish_path
+        publish_dir.mkdir(parents=True, exist_ok=True)
+        meta = {
+            "stage": STAGE_CONTENT,
+            "title": "手动草稿",
+            "created": "2024-01-01T00:00:00",
+            "updated": "2024-01-01T00:00:00",
+        }
+        (publish_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        (publish_dir / "draft.md").write_text("正文内容", encoding="utf-8")
 
         # Create new Writer instance (simulates restart)
         w = Writer(cfg, llm)
@@ -257,9 +256,12 @@ class TestEdgeCases:
         """Recovery at review stage."""
         cfg = make_cfg(tmp_path)
         llm = MagicMock()
-        draft_path = cfg.knowledge.publish_path / "draft.md"
-        post = new_post("## 正文\n\n内容\n", title="草稿", stage=STAGE_REVIEW)
-        write_note(draft_path, post)
+
+        publish_dir = cfg.knowledge.publish_path
+        publish_dir.mkdir(parents=True, exist_ok=True)
+        meta = {"stage": STAGE_REVIEW, "title": "草稿", "created": "2024-01-01T00:00:00", "updated": "2024-01-01T00:00:00"}
+        (publish_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        (publish_dir / "draft.md").write_text("内容", encoding="utf-8")
 
         w = Writer(cfg, llm)
         assert w.active is True

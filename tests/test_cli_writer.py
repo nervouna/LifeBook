@@ -1,6 +1,7 @@
 """Tests for CLI write/publish commands."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,8 +13,7 @@ from lifebook.config import (
     Config, KnowledgeConfig, LLMConfig, FeishuConfig,
     ExecutorConfig, DigestConfig, TavilyConfig, FetchConfig, LoggingConfig,
 )
-from lifebook.notes import new_post, write_note, read_note
-from lifebook.writer import STAGE_CONTENT, STAGE_CONCEPT
+from lifebook.writer import STAGE_CONTENT
 
 
 def make_cfg(tmp_path: Path) -> Config:
@@ -68,16 +68,17 @@ class TestCLIWriterCommands:
     def test_publish_command_with_draft(self, tmp_path):
         """/publish on existing draft at content stage should succeed."""
         cfg = make_cfg(tmp_path)
-        # Create a draft manually
-        draft_path = cfg.knowledge.publish_path / "draft.md"
-        post = new_post(
-            "## 核心概念\n\n概念\n\n## 框架\n\n框架\n\n## 正文\n\n正文内容\n",
-            title="测试主题",
-            stage=STAGE_CONTENT,
-            created="2024-01-01T00:00:00",
-            updated="2024-01-01T00:00:00",
-        )
-        write_note(draft_path, post)
+        publish_dir = cfg.knowledge.publish_path
+        publish_dir.mkdir(parents=True, exist_ok=True)
+        meta = {
+            "stage": STAGE_CONTENT,
+            "title": "测试主题",
+            "created": "2024-01-01T00:00:00",
+            "updated": "2024-01-01T00:00:00",
+            "checklist": "",
+        }
+        (publish_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        (publish_dir / "draft.md").write_text("正文内容", encoding="utf-8")
 
         runner = CliRunner()
         mock_llm = MagicMock()
