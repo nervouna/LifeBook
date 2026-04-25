@@ -321,7 +321,7 @@ class FeishuBot:
         try:
             if self._vector is None:
                 from .vector import VectorIndex
-                persist_dir = self.cfg.knowledge.state_path / "vector_store"
+                persist_dir = self.cfg.knowledge.vector_store_path
                 self._vector = VectorIndex(persist_dir)
             results = self._vector.search(query, n_results=5)
 
@@ -360,7 +360,7 @@ class FeishuBot:
 
         try:
             from .vector import VectorIndex
-            persist_dir = self.cfg.knowledge.state_path / "vector_store"
+            persist_dir = self.cfg.knowledge.vector_store_path
             self._vector = VectorIndex(persist_dir)
             logger.info("VectorIndex initialized")
         except Exception as e:

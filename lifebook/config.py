@@ -57,6 +57,10 @@ class KnowledgeConfig:
     def publish_path(self) -> Path:
         return self.root / self.publish_dir
 
+    @property
+    def vector_store_path(self) -> Path:
+        return self.state_path / "vector_store"
+
 
 @dataclass
 class LLMConfig:
