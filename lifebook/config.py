@@ -149,6 +149,13 @@ class LoggingConfig:
 
 
 @dataclass
+class WebConfig:
+    host: str = "127.0.0.1"
+    port: int = 8080
+    debug: bool = False
+
+
+@dataclass
 class Config:
     knowledge: KnowledgeConfig
     llm: LLMConfig
@@ -162,6 +169,7 @@ class Config:
     vision: VisionConfig | None = None
     tts: TTSConfig = field(default_factory=TTSConfig)
     feishu_podcast: FeishuConfig | None = None
+    web: WebConfig = field(default_factory=WebConfig)
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -219,6 +227,7 @@ def load_config(path: Path | str | None = None) -> Config:
     tts = TTSConfig(**_filter(TTSConfig, raw.get("tts")))
     fp_raw = raw.get("feishu_podcast")
     feishu_podcast = FeishuConfig(**_filter(FeishuConfig, fp_raw)) if fp_raw else None
+    web = WebConfig(**_filter(WebConfig, raw.get("web")))
 
     return Config(
         knowledge=knowledge,
@@ -233,5 +242,6 @@ def load_config(path: Path | str | None = None) -> Config:
         vision=vision,
         tts=tts,
         feishu_podcast=feishu_podcast,
+        web=web,
         raw=raw,
     )

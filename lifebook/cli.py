@@ -168,6 +168,25 @@ def serve(ctx: click.Context) -> None:
 
 
 @main.command()
+@click.option("--host", default=None, help="Bind host (default: from config).")
+@click.option("--port", type=int, default=None, help="Bind port (default: from config).")
+@click.option("--reload", "do_reload", is_flag=True, default=False, help="Enable auto-reload for development.")
+@click.pass_context
+def web(ctx: click.Context, host: str | None, port: int | None, do_reload: bool) -> None:
+    """Start the web interface."""
+    import uvicorn
+    from .web.app import create_app
+    cfg = ctx.obj["config"]
+    app = create_app(cfg)
+    uvicorn.run(
+        app,
+        host=host or cfg.web.host,
+        port=port or cfg.web.port,
+        reload=do_reload,
+    )
+
+
+@main.command()
 @click.option("--timeout", "timeout_minutes", type=int, default=10,
               help="Rollback files stuck in processing for more than N minutes (default: 10).")
 @click.option("--dry-run", is_flag=True, default=False,
