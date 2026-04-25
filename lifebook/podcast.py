@@ -8,10 +8,11 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import frontmatter
 
+from .config import Config
+from .llm import LLMClient
 from .tts import TTSClient, TTSError
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ class ScriptSegment:
 
 
 class PodcastGenerator:
-    def __init__(self, cfg: Any, llm: Any = None, tts: TTSClient | None = None):
+    def __init__(self, cfg: Config, llm: LLMClient | None = None, tts: TTSClient | None = None):
         self.cfg = cfg
         self.llm = llm
         self.tts = tts or TTSClient(cfg.tts)

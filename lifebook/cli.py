@@ -5,10 +5,14 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from .config import load_config, POINTER_FILE, resolve_config_path, KnowledgeConfig
+
+if TYPE_CHECKING:
+    from .executor import ProcessResult
 
 
 @click.group()
@@ -115,7 +119,7 @@ def process(ctx: click.Context, file_path: str | None, watch: bool, interval: in
     _run_once()
 
 
-def _print_result(r) -> None:
+def _print_result(r: ProcessResult) -> None:
     name = r.source_path.name
     if r.ok and r.topic_path:
         click.echo(f"  ✓ {name}  →  {r.topic_path.name}")
