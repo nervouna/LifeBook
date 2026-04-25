@@ -9,4 +9,6 @@ def test_app_creates(client: TestClient):
 
 def test_api_prefix(client: TestClient):
     response = client.get("/api/system/doctor")
-    assert response.json() == {"checks": []}
+    data = response.json()
+    assert "checks" in data
+    assert len(data["checks"]) >= 1
