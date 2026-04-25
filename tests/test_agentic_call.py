@@ -1,6 +1,7 @@
 """Tests for agentic_call, web_search, and _discuss integration."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,7 @@ import pytest
 
 from lifebook.config import Config, KnowledgeConfig, LLMConfig, TavilyConfig, FeishuConfig, ExecutorConfig, DigestConfig, FetchConfig, LoggingConfig
 from lifebook.llm import LLMClient
+from lifebook.notes import now_iso
 from lifebook.fetcher import WEB_SEARCH_TOOL, web_search
 from lifebook.writer import UPDATE_DRAFT_TOOL
 
@@ -160,6 +162,21 @@ class TestWebSearch:
 
 # ---- _discuss integration test ----
 
+def _create_discuss_draft(writer, stage="content", title="test", checklist=""):
+    """Create draft.json + draft.md for _discuss tests."""
+    writer.draft_meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "stage": stage,
+        "title": title,
+        "created": now_iso(),
+        "updated": now_iso(),
+        "concept": {"concept_text": "Test concept"},
+        "checklist": checklist,
+    }
+    writer.draft_meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    writer.draft_path.write_text("Original content", encoding="utf-8")
+
+
 class TestDiscussIntegration:
     def test_discuss_uses_agentic_call(self, tmp_path):
         """_discuss should call agentic_call instead of text_call."""
@@ -171,18 +188,9 @@ class TestDiscussIntegration:
         llm.agentic_call = MagicMock(return_value="## Updated content\n\nNew text")
 
         from lifebook.writer import Writer, STAGE_CONTENT
-        from lifebook.notes import new_post, now_iso
 
         writer = Writer(cfg, llm)
-
-        # Create a draft in content stage
-        post = new_post(
-            "## 核心概念\n\nTest concept\n\n## 框架\n\nTest framework\n\n## 正文\n\nOriginal content\n",
-            title="test", stage=STAGE_CONTENT, created=now_iso(), updated=now_iso(),
-        )
-        cfg.knowledge.publish_path.mkdir(parents=True, exist_ok=True)
-        from lifebook.notes import write_note
-        write_note(writer.draft_path, post)
+        _create_discuss_draft(writer, stage=STAGE_CONTENT)
 
         result = writer._discuss("请修改第一段")
 
@@ -200,15 +208,9 @@ class TestDiscussIntegration:
         llm.agentic_call = MagicMock(return_value="讨论内容")
 
         from lifebook.writer import Writer, STAGE_CONTENT
-        from lifebook.notes import new_post, now_iso, write_note
 
         writer = Writer(cfg, llm)
-        post = new_post(
-            "## 核心概念\n\nTest concept\n\n## 框架\n\nTest framework\n\n## 正文\n\nOriginal content\n",
-            title="test", stage=STAGE_CONTENT, created=now_iso(), updated=now_iso(),
-        )
-        cfg.knowledge.publish_path.mkdir(parents=True, exist_ok=True)
-        write_note(writer.draft_path, post)
+        _create_discuss_draft(writer, stage=STAGE_CONTENT)
 
         writer._discuss("请修改第一段")
 
@@ -226,19 +228,12 @@ class TestDiscussIntegration:
             llm = LLMClient(cfg.llm)
 
         from lifebook.writer import Writer, STAGE_CONTENT, STAGE_REVIEW
-        from lifebook.notes import new_post, now_iso, write_note, read_note
 
         writer = Writer(cfg, llm)
-        post = new_post(
-            "## 核心概念\n\nTest concept\n\n## 框架\n\nTest framework\n\n## 正文\n\nOriginal content\n",
-            title="test", stage=STAGE_CONTENT, created=now_iso(), updated=now_iso(),
-        )
-        cfg.knowledge.publish_path.mkdir(parents=True, exist_ok=True)
-        write_note(writer.draft_path, post)
+        _create_discuss_draft(writer, stage=STAGE_CONTENT, checklist="- old item")
 
         # Mock agentic_call to simulate tool execution by calling the executor directly
         def fake_agentic_call(system, messages, tools, tool_executor, **kwargs):
-            # Simulate the LLM calling update_draft
             tool_executor["update_draft"]({"content": "Updated article content", "checklist": "- 新清单项"})
             return "我已经修改了文章内容。"
 
@@ -246,17 +241,15 @@ class TestDiscussIntegration:
 
         result = writer._discuss("请修改内容")
 
-        # Check result is discussion text only
         assert result == "我已经修改了文章内容。"
 
-        # Check history contains only discussion text
         assert len(writer._history) == 2
         assert writer._history[0] == {"role": "user", "content": "请修改内容"}
         assert writer._history[1] == {"role": "assistant", "content": "我已经修改了文章内容。"}
         assert "Updated article content" not in writer._history[1]["content"]
 
-        # Check draft file was updated
-        draft = read_note(writer.draft_path)
-        assert "Updated article content" in draft.content
-        assert "新清单项" in draft.content
-        assert draft.get("stage") == STAGE_REVIEW
+        # Verify draft.json was updated
+        meta, content = writer._load_draft()
+        assert meta["stage"] == STAGE_REVIEW
+        assert meta["checklist"] == "- 新清单项"
+        assert "Updated article content" in content

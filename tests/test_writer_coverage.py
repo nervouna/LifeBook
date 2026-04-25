@@ -1,6 +1,7 @@
 """Coverage tests for writer.py missing lines."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -10,8 +11,8 @@ from lifebook.config import (
     Config, KnowledgeConfig, LLMConfig, FeishuConfig,
     ExecutorConfig, DigestConfig, TavilyConfig, FetchConfig, LoggingConfig,
 )
-from lifebook.notes import new_post, write_note
-from lifebook.writer import Writer, STAGE_CONCEPT, STAGE_CONTENT, STAGE_REVIEW
+from lifebook.notes import new_post, now_iso, write_note
+from lifebook.writer import Writer, STAGE_CONCEPT, STAGE_CONTENT, STAGE_FRAMEWORK, STAGE_REVIEW
 
 
 def make_cfg(tmp_path: Path) -> Config:
@@ -61,8 +62,10 @@ FRAMEWORK_RESULT = {
 class TestWriterEdgeCases:
     def test_unknown_stage_returns_message(self, tmp_path):
         w, llm, cfg = make_writer(tmp_path)
-        post = new_post("body", title="T", stage="unknown_stage")
-        write_note(w.draft_path, post)
+        meta = {"stage": "unknown_stage", "title": "T", "created": now_iso(), "updated": now_iso()}
+        w.draft_meta_path.parent.mkdir(parents=True, exist_ok=True)
+        w.draft_meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        w.draft_path.write_text("body", encoding="utf-8")
         result = w.handle_message("hello")
         assert "未知状态" in result
 
@@ -133,12 +136,10 @@ class TestWriterEdgeCases:
         w.handle_message("确认")
         llm.text_call.side_effect = ["引言段落", "论证段落", "- checklist"]
         w.handle_message("选方案1")
-        # Remove checklist
-        post = w._load_draft()
-        if "## 自检清单" in post.content:
-            idx = post.content.index("## 自检清单")
-            post.content = post.content[:idx].rstrip() + "\n"
-            w._save_draft(post)
+        # Remove checklist from draft.json
+        meta, content = w._load_draft()
+        meta["checklist"] = ""
+        w._save_draft(meta, content)
         # Create a topic so _evaluate_backfill gets non-empty topic_context
         # The topic title must match the publish title "测试主题" for search to find it.
         # Also invalidate the store cache so Writer picks up the new topic.
@@ -177,19 +178,18 @@ class TestWriterEdgeCases:
         assert "方案" in result
 
     def test_advance_to_content_no_outline(self, tmp_path):
-        """Lines 280-290: fallback when outline parsing returns empty."""
+        """Empty outline → stays at framework stage with rejection message."""
         w, llm, cfg = make_writer(tmp_path)
         llm.structured_call.return_value = CONCEPT_RESULT
         w.start("idea about 测试主题")
         w.store.search_topics_formatted = MagicMock(return_value="### 旧笔记\n一些内容")
-        # Framework with no matching structure
         llm.structured_call.return_value = {
             "frameworks": [{"name": "A", "outline": []}]
         }
         w.handle_message("确认")
-        llm.text_call.return_value = "Full content generated\n---\n- check"
         result = w.handle_message("随便写")
-        assert w.stage == STAGE_CONTENT
+        assert w.stage == STAGE_FRAMEWORK
+        assert "未找到" in result
 
     def test_section_gen_with_topic_context(self, tmp_path):
         """Lines 303: topic_context in per-section generation."""
@@ -216,34 +216,3 @@ class TestWriterEdgeCases:
         llm.agentic_call.return_value = "讨论回复"
         result = w.handle_message("某个问题")
         assert "讨论回复" in result
-
-    def test_parse_outline_no_schemes(self):
-        """Lines 684: _parse_outline with no scheme blocks."""
-        from lifebook.writer import Writer
-        result = Writer._parse_outline("no schemes here", "feedback")
-        assert result == []
-
-    def test_parse_outline_number_match(self):
-        """Lines 694: match by 方案 number in feedback (when label/name not found)."""
-        from lifebook.writer import Writer
-        body = (
-            "### 方案 1：PlanA\n"
-            "- **h1**：p1\n"
-            "- **h2**：p2\n"
-            "\n"
-            "### 方案 2：PlanB\n"
-            "- **h3**：p3\n"
-        )
-        # Use feedback that contains the digit "2" but not "方案2" or "PlanB"
-        result = Writer._parse_outline(body, "我选 2")
-        assert len(result) == 1
-        assert result[0]["heading"] == "h3"
-
-    def test_splice_unchanged_with_code_blocks(self, tmp_path):
-        """Lines 622: code block toggle in _splice_unchanged."""
-        w, llm, cfg = make_writer(tmp_path)
-        original = "## Section A\n\ncontent a\n\n## Section B\n\n```\ncode here\n```\n\ncontent b\n"
-        updated = "## Section A\n\n[UNCHANGED]\n\n## Section B\n\n```\nnew code\n```\n\nnew content b\n"
-        result = w._splice_unchanged(original, updated)
-        assert "content a" in result
-        assert "new code" in result
