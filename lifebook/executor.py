@@ -5,6 +5,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import frontmatter
+
 from .config import Config
 from .fetcher import Fetcher
 from .image_processor import ImageData, compress_image
@@ -140,7 +142,7 @@ class Executor:
 
     # ---------- pipeline steps ----------
 
-    def _process_image_file(self, source_path: Path, post: Any) -> ProcessResult:
+    def _process_image_file(self, source_path: Path, post: frontmatter.Post) -> ProcessResult:
         """Process an image source file: compress, extract, write topic."""
         image_path_rel = post.get("image_path") or ""
         if not image_path_rel:
@@ -190,7 +192,7 @@ class Executor:
         return ProcessResult(source_path, True, topic_path=topic_path)
 
     def _extract_image(
-        self, img_data: ImageData, post: Any, source_path: Path,
+        self, img_data: ImageData, post: frontmatter.Post, source_path: Path,
     ) -> tuple[dict, ProcessResult | None]:
         """Extract structured data from an image via vision LLM."""
         existing_categories = [
@@ -218,7 +220,7 @@ class Executor:
             return {}, ProcessResult(source_path, False, error=f"LLM failed: {e}")
         return extracted, None
 
-    def _claim(self, source_path: Path) -> tuple[Any, ProcessResult | None]:
+    def _claim(self, source_path: Path) -> tuple[frontmatter.Post, None] | tuple[None, ProcessResult]:
         """Claim file for processing. Returns (post, error_or_none)."""
         try:
             claimed, post = self.store.claim_for_processing(source_path)
@@ -232,7 +234,7 @@ class Executor:
             )
         return post, None
 
-    def _check_duplicate(self, url: str, post: Any, source_path: Path) -> ProcessResult | None:
+    def _check_duplicate(self, url: str, post: frontmatter.Post, source_path: Path) -> ProcessResult | None:
         """Check for duplicate source_url. Returns error ProcessResult or None."""
         if not url:
             return None
@@ -249,7 +251,7 @@ class Executor:
         return None
 
     def _fetch_if_needed(
-        self, url: str, content: str, post: Any, source_path: Path,
+        self, url: str, content: str, post: frontmatter.Post, source_path: Path,
     ) -> tuple[str, ProcessResult | None]:
         """Fetch URL content if needed. Returns (content, error_or_none)."""
         if not url or content:
@@ -273,7 +275,7 @@ class Executor:
         self.store.write_note(source_path, post)
         return content, None
 
-    def _extract(self, content: str, post: Any, source_path: Path) -> tuple[dict, ProcessResult | None]:
+    def _extract(self, content: str, post: frontmatter.Post, source_path: Path) -> tuple[dict, ProcessResult | None]:
         """Extract structured data via LLM. Returns (extracted, error_or_none)."""
         extra_meta = {k: v for k, v in post.metadata.items()
                       if k not in STANDARD_SOURCE_FIELDS}
@@ -301,7 +303,7 @@ class Executor:
             return {}, ProcessResult(source_path, False, error=f"LLM failed: {e}")
         return extracted, None
 
-    def _validate(self, extracted: dict, conf: float, post: Any, source_path: Path) -> ProcessResult | None:
+    def _validate(self, extracted: dict, conf: float, post: frontmatter.Post, source_path: Path) -> ProcessResult | None:
         """Validate confidence and category. Returns error ProcessResult or None."""
         if conf < self.cfg.executor.classify_min_confidence:
             post["status"] = "skipped"
@@ -370,7 +372,7 @@ class Executor:
         return topic_path
 
     def _mark_processed(
-        self, source_path: Path, post: Any, topic_path: Path, extracted: dict,
+        self, source_path: Path, post: frontmatter.Post, topic_path: Path, extracted: dict,
     ) -> None:
         """Update source file status to processed."""
         post["status"] = "processed"
