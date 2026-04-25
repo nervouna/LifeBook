@@ -152,7 +152,9 @@ def ingest(ctx: click.Context, url_or_text: str, source_type: str, title: str | 
 @click.pass_context
 def digest(ctx: click.Context) -> None:
     """Generate and push today's digest to Feishu."""
-    click.echo("[stub] digest — Day 5 implementation pending")
+    click.echo("[LifeBook] digest 命令尚未实现。")
+    click.echo("提示：可以通过 Feishu Bot 发送 /process 来处理 inbox 中的文件。")
+    sys.exit(1)
 
 
 @main.command()

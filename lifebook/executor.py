@@ -130,6 +130,7 @@ class Executor:
         return ProcessResult(source_path, True, topic_path=topic_path)
 
     def process_inbox(self) -> list[ProcessResult]:
+        self.store._invalidate_topic_cache()
         files = self.scan_inbox()
         limit = self.cfg.executor.batch_limit
         if len(files) > limit:
@@ -405,6 +406,7 @@ class Executor:
         header_text = "\n".join(header)
         max_chars = 60000
         if len(content) > max_chars:
+            logger.info("Truncating content from %d to %d chars (title_hint=%s)", len(content), max_chars, title_hint)
             content = content[:max_chars] + "\n\n[...内容过长已截断...]"
         return f"{header_text}\n\n---\n\n原始素材：\n\n{content}"
 

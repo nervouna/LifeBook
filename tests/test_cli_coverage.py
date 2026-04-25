@@ -116,11 +116,11 @@ class TestProcessInboxResults:
 
 
 class TestDigestCommand:
-    def test_digest_stub(self, runner, mock_cfg):
+    def test_digest_not_implemented(self, runner, mock_cfg):
         with patch("lifebook.cli.load_config", return_value=mock_cfg):
             result = runner.invoke(main, ["digest"], catch_exceptions=False)
-        assert result.exit_code == 0
-        assert "stub" in result.output
+        assert result.exit_code == 1
+        assert "尚未实现" in result.output
 
 
 class TestServeCommand:
