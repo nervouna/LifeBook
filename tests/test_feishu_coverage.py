@@ -94,6 +94,90 @@ class TestSendReplyText:
                     result = transport.send_text("chat1", "hello")
         assert result == "mid123"
 
+
+class TestSendFile:
+    def test_send_file_success(self):
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client"):
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = True
+            mock_resp.data.message_id = "file_msg_123"
+            transport.api.im.v1.message.create.return_value = mock_resp
+            with patch("lifebook.feishu_transport.CreateMessageRequestBody") as MockBody:
+                with patch("lifebook.feishu_transport.CreateMessageRequest") as MockReq:
+                    MockBody.builder.return_value.receive_id.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
+                    MockReq.builder.return_value.receive_id_type.return_value.request_body.return_value.build.return_value = MagicMock()
+                    result = transport.send_file("chat1", "file_key_abc")
+        assert result == "file_msg_123"
+
+    def test_send_file_failure(self):
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client"):
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = False
+            mock_resp.code = 500
+            mock_resp.msg = "error"
+            transport.api.im.v1.message.create.return_value = mock_resp
+            with patch("lifebook.feishu_transport.CreateMessageRequestBody") as MockBody:
+                with patch("lifebook.feishu_transport.CreateMessageRequest") as MockReq:
+                    MockBody.builder.return_value.receive_id.return_value.msg_type.return_value.content.return_value.build.return_value = MagicMock()
+                    MockReq.builder.return_value.receive_id_type.return_value.request_body.return_value.build.return_value = MagicMock()
+                    result = transport.send_file("chat1", "file_key_abc")
+        assert result is None
+
+
+class TestDownloadImage:
+    def test_download_success(self):
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client"):
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = True
+            mock_resp.file.read.return_value = b"\x89PNG\r\n"
+            transport.api.im.v1.message_resource.get.return_value = mock_resp
+            result = transport.download_image_message("msg1", "img_key_1")
+        assert result == b"\x89PNG\r\n"
+
+    def test_download_api_failure(self):
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client"):
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = False
+            mock_resp.code = 404
+            mock_resp.msg = "not found"
+            transport.api.im.v1.message_resource.get.return_value = mock_resp
+            result = transport.download_image_message("msg1", "img_key_1")
+        assert result is None
+
+    def test_download_no_file_in_response(self):
+        from lifebook.feishu_transport import FeishuTransport
+        cfg = MagicMock()
+        cfg.app_id = "app"
+        cfg.app_secret = "secret"
+        with patch("lifebook.feishu_transport.lark.Client"):
+            transport = FeishuTransport(cfg)
+            mock_resp = MagicMock()
+            mock_resp.success.return_value = True
+            mock_resp.file = None
+            transport.api.im.v1.message_resource.get.return_value = mock_resp
+            result = transport.download_image_message("msg1", "img_key_1")
+        assert result is None
+
     def test_send_text_failure(self):
         from lifebook.feishu_transport import FeishuTransport
         cfg = MagicMock()

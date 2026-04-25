@@ -274,3 +274,70 @@ class TestMainEntry:
                 runpy.run_module("lifebook.cli", run_name="__main__")
             except SystemExit:
                 pass
+
+
+class TestPodcastCommand:
+    def test_podcast_happy_path(self, runner, mock_cfg, tmp_path):
+        note = tmp_path / "test_note.md"
+        note.write_text("---\ntitle: Test\n---\nContent\n", encoding="utf-8")
+
+        with patch("lifebook.cli.load_config", return_value=mock_cfg):
+            with patch("lifebook.podcast.PodcastGenerator") as MockGen:
+                gen_inst = MockGen.return_value
+                gen_inst.generate.return_value = (b"fake_mp3", 30)
+                result = runner.invoke(main, ["podcast", str(note)], catch_exceptions=False)
+        assert result.exit_code == 0
+        assert "Generating podcast" in result.output
+        assert "Saved" in result.output
+
+    def test_podcast_custom_output(self, runner, mock_cfg, tmp_path):
+        note = tmp_path / "test_note.md"
+        note.write_text("---\ntitle: Test\n---\nContent\n", encoding="utf-8")
+        out = tmp_path / "custom.mp3"
+
+        with patch("lifebook.cli.load_config", return_value=mock_cfg):
+            with patch("lifebook.podcast.PodcastGenerator") as MockGen:
+                gen_inst = MockGen.return_value
+                gen_inst.generate.return_value = (b"fake_mp3", 30)
+                result = runner.invoke(
+                    main, ["podcast", str(note), "-o", str(out)],
+                    catch_exceptions=False,
+                )
+        assert result.exit_code == 0
+        assert out.exists()
+
+
+class TestPodcastMultiCommand:
+    def test_podcast_multi_happy_path(self, runner, mock_cfg, tmp_path):
+        mock_cfg.knowledge.topics_path = tmp_path / "topics"
+        mock_cfg.knowledge.topics_path.mkdir()
+
+        with patch("lifebook.cli.load_config", return_value=mock_cfg):
+            with patch("lifebook.podcast.select_notes") as mock_select:
+                n1 = tmp_path / "topics" / "a.md"
+                n1.write_text("---\ntitle: A\n---\nC\n", encoding="utf-8")
+                mock_select.return_value = ([n1], 1)
+                with patch("lifebook.podcast.PodcastGenerator") as MockGen:
+                    gen_inst = MockGen.return_value
+                    gen_inst.generate_multi.return_value = (b"fake_mp3", 30)
+                    result = runner.invoke(
+                        main, ["podcast-multi", "--since", "2026-01-01"],
+                        catch_exceptions=False,
+                    )
+        assert result.exit_code == 0
+        assert "Found 1 notes" in result.output
+        assert "Saved" in result.output
+
+    def test_podcast_multi_no_notes(self, runner, mock_cfg, tmp_path):
+        mock_cfg.knowledge.topics_path = tmp_path / "topics"
+        mock_cfg.knowledge.topics_path.mkdir()
+
+        with patch("lifebook.cli.load_config", return_value=mock_cfg):
+            with patch("lifebook.podcast.select_notes") as mock_select:
+                mock_select.return_value = ([], 0)
+                result = runner.invoke(
+                    main, ["podcast-multi", "--since", "2026-01-01"],
+                    catch_exceptions=False,
+                )
+        assert result.exit_code == 1
+        assert "No notes found" in result.output
