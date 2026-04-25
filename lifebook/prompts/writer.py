@@ -175,6 +175,8 @@ BACKFILL_SYSTEM = """\
 2. 文章对已有 topic 提出了明确不同的结论
 
 不符合以上任一条件，则不回填。不要因为"相关"或"有价值"就回填，只有真正的新增信息才有资格。
+
+新建 topic 时，必须指定 category 分类目录名，与知识库中已有的分类一致。
 """
 
 BACKFILL_TOOL_SCHEMA: dict[str, Any] = {
@@ -205,6 +207,10 @@ BACKFILL_TOOL_SCHEMA: dict[str, Any] = {
                     "content": {
                         "type": "string",
                         "description": "要回填的内容（Markdown 片段）",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "回填笔记的分类目录（新建时必须提供）",
                     },
                 },
                 "required": ["action", "topic_title", "reason", "content"],

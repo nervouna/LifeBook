@@ -64,6 +64,26 @@ class Writer:
         self.history_path = cfg.knowledge.publish_path / "draft.history.json"
         self._history: list[dict[str, str]] = []
         self._lock = threading.Lock()
+        self._vector = None
+
+    def _vector_search(self, query: str, max_notes: int = 5) -> str:
+        """Semantic search via VectorIndex, falling back to keyword search."""
+        try:
+            if self._vector is None:
+                from .vector import VectorIndex
+                self._vector = VectorIndex(self.cfg.knowledge.vector_store_path)
+            results = self._vector.search(query, n_results=max_notes)
+            if not results:
+                return self.store.search_topics_formatted(query, max_notes)
+            parts = []
+            for r in results:
+                title = r.metadata.get("title", r.doc_id)
+                preview = r.text[:200]
+                parts.append(f"### {title}\n{preview}\n")
+            return "\n".join(parts)
+        except Exception as e:
+            logger.debug("VectorIndex unavailable, falling back to keyword: %s", e)
+            return self.store.search_topics_formatted(query, max_notes)
 
     # --------------- public API ---------------
 
@@ -90,7 +110,7 @@ class Writer:
             return "已有一篇草稿正在进行中。请先 /publish 完成或手动删除 draft.md 再开始新的写作。"
 
         # Search existing topics for context
-        topic_context = self.store.search_topics_formatted(idea)
+        topic_context = self._vector_search(idea)
         logger.debug("topic context hits: %d chars", len(topic_context))
 
         prompt = f"用户的写作想法：\n{idea}"
@@ -221,7 +241,7 @@ class Writer:
 
         concept = meta.get("concept", {}) if meta else {}
         concept_text = concept.get("concept_text", "")
-        topic_context = self.store.search_topics_formatted(concept_text)
+        topic_context = self._vector_search(concept_text)
 
         prompt = f"已确认的核心概念：\n{concept_text}\n\n用户反馈：\n{feedback}"
         if topic_context:
@@ -267,7 +287,7 @@ class Writer:
         concept = meta.get("concept", {}) if meta else {}
         concept_text = concept.get("concept_text", "")
         frameworks = meta.get("frameworks", [])
-        topic_context = self.store.search_topics_formatted(concept_text)
+        topic_context = self._vector_search(concept_text)
 
         # Select framework by index or name
         outline = self._select_framework(frameworks, feedback)
@@ -353,7 +373,7 @@ class Writer:
         concept = meta.get("concept", {}) if meta else {}
         concept_text = concept.get("concept_text", "")
         checklist = meta.get("checklist", "") if meta else ""
-        topic_context = self.store.search_topics_formatted(feedback)
+        topic_context = self._vector_search(feedback)
 
         # Load history from file
         self._load_history()
@@ -441,7 +461,7 @@ class Writer:
     def _evaluate_backfill(self, title: str, content: str) -> str:
         """Evaluate whether the article produces new knowledge to backfill."""
         logger.info("evaluating backfill for %r", title)
-        topic_context = self.store.search_topics_formatted(title, max_notes=20)
+        topic_context = self._vector_search(title, max_notes=20)
         if not topic_context:
             return ""
 
@@ -477,7 +497,8 @@ class Writer:
             reason = item["reason"]
 
             if action == "create":
-                self._backfill_create(topic_title, item["content"], title)
+                category = item.get("category", "")
+                self._backfill_create(topic_title, item["content"], title, category=category)
                 backfill_lines.append(f"  + 新建 topic：{topic_title}（{reason}）")
             elif action == "update":
                 updated = self._backfill_update(topic_title, item["content"], title)
@@ -488,18 +509,23 @@ class Writer:
 
         return "\n".join(backfill_lines)
 
-    def _backfill_create(self, topic_title: str, content: str, source_title: str) -> Path:
+    def _backfill_create(self, topic_title: str, content: str, source_title: str, category: str = "") -> Path:
         """Create a new topic note from backfill."""
-        logger.info("backfill_create topic=%r", topic_title)
+        logger.info("backfill_create topic=%r category=%r", topic_title, category)
         meta = {
             "title": topic_title,
             "created": now_iso(),
             "backfilled_from": source_title,
             "status": "active",
         }
+        if category:
+            meta["category"] = category
         post = new_post(content.strip() + "\n", **meta)
-        # Put in a general category dir; could be smarter later
-        topic_dir = self.cfg.knowledge.topics_path
+        if category:
+            topic_dir = self.cfg.knowledge.topics_path / category
+            topic_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            topic_dir = self.cfg.knowledge.topics_path
         stem = slugify(topic_title)
         path = unique_path(topic_dir, stem)
         self.store.write_note(path, post)
