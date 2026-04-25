@@ -106,7 +106,9 @@ BACKFILL_NONE = {"should_backfill": False, "items": []}
 class TestInitDoctorFlow:
     def test_init_creates_structure(self, runner, tmp_path):
         root = tmp_path / "new_kb"
-        with patch("lifebook.cli.load_config") as mock_load:
+        fake_ptr = tmp_path / "fake_location"
+        with patch("lifebook.cli.load_config") as mock_load, \
+             patch("lifebook.cli.POINTER_FILE", fake_ptr):
             mock_load.return_value = make_config(root)
             result = runner.invoke(main, ["init", "--root", str(root)], catch_exceptions=False)
 
