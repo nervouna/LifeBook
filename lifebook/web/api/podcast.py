@@ -1,6 +1,66 @@
 """Podcast API endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+import json
+
+from fastapi import APIRouter, HTTPException, Request
+from sse_starlette.sse import EventSourceResponse
+
+from ..schemas import PodcastGenerateRequest, PodcastGenerateMultiRequest
 
 router = APIRouter()
+
+
+@router.post("/generate")
+async def generate_podcast(req: PodcastGenerateRequest, request: Request):
+    cfg = request.app.state.cfg
+    note_path = cfg.knowledge.root / req.note_path
+    if not note_path.is_file():
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    from lifebook.llm import LLMClient
+    from lifebook.podcast import PodcastGenerator
+
+    gen = PodcastGenerator(cfg, llm=LLMClient(cfg.llm))
+
+    async def event_stream():
+        yield {"event": "progress", "data": json.dumps({"step": "script", "message": "生成播客脚本..."})}
+        try:
+            audio_bytes, duration = gen.generate(note_path)
+            output = note_path.with_name(f"{note_path.stem}_podcast.mp3")
+            output.write_bytes(audio_bytes)
+            yield {"event": "done", "data": json.dumps({"path": output.name, "duration": duration})}
+        except Exception as e:
+            yield {"event": "error", "data": json.dumps({"message": str(e)})}
+
+    return EventSourceResponse(event_stream())
+
+
+@router.post("/generate-multi")
+async def generate_podcast_multi(req: PodcastGenerateMultiRequest, request: Request):
+    cfg = request.app.state.cfg
+    import datetime as dt
+
+    from lifebook.podcast import select_notes, PodcastGenerator
+    from lifebook.llm import LLMClient
+
+    since_date = dt.date.fromisoformat(req.since)
+    notes, total = select_notes(cfg.knowledge.topics_path, since_date, req.limit)
+    if not notes:
+        raise HTTPException(status_code=404, detail="No notes found")
+
+    gen = PodcastGenerator(cfg, llm=LLMClient(cfg.llm))
+    has_more = total > req.limit
+
+    async def event_stream():
+        yield {"event": "progress", "data": json.dumps({"step": "script", "message": "生成合集脚本..."})}
+        try:
+            audio_bytes, duration = gen.generate_multi(notes, has_more)
+            date_str = since_date.isoformat()
+            output = cfg.knowledge.topics_path / f"podcast_{date_str}_multi.mp3"
+            output.write_bytes(audio_bytes)
+            yield {"event": "done", "data": json.dumps({"path": output.name, "duration": duration})}
+        except Exception as e:
+            yield {"event": "error", "data": json.dumps({"message": str(e)})}
+
+    return EventSourceResponse(event_stream())
