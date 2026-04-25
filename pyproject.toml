@@ -24,6 +24,9 @@ dependencies = [
     "sentence-transformers>=2.7.0",
     "platformdirs>=4.0.0",
     "pillow>=10.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sse-starlette>=2.0.0",
 ]
 
 [project.scripts]

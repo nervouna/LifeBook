@@ -1,0 +1,1 @@
+"""LifeBook web interface."""
