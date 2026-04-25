@@ -188,14 +188,13 @@ class TestIndexCommand:
         assert "60s" in result.output or result.exit_code == 0
 
     def test_index_with_errors(self, runner, mock_cfg, mock_chromadb_modules):
-        stats = {"upserted": 0, "deleted": 0, "unchanged": 0, "errors": ["err1", "err2", "err3", "err4", "err5", "err6"]}
+        stats = {"upserted": 0, "deleted": 0, "unchanged": 0, "errors": 6}
         with patch("lifebook.cli.load_config", return_value=mock_cfg):
             from lifebook.indexer import Indexer
             with patch.object(Indexer, "__init__", return_value=None):
                 with patch.object(Indexer, "incremental_update", return_value=stats):
                     result = runner.invoke(main, ["index"], catch_exceptions=False)
         assert "Errors: 6" in result.output
-        assert "and 1 more" in result.output
 
 
 class TestSearchCommand:

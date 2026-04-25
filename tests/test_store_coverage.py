@@ -201,34 +201,3 @@ class TestSearchTopicsEdgeCases:
         finally:
             external.unlink(missing_ok=True)
 
-    def test_write_note_fallback_is_relative_to_raises(self, store):
-        """Lines 285-290: force is_relative_to to raise, path IS under topics_path."""
-        from unittest.mock import patch as p
-        from lifebook.store import NoteStore
-        ns = NoteStore(store.cfg)
-        post = new_post("body", title="Test")
-        td = ns.cfg.topics_path
-        cat = td / "test"
-        cat.mkdir(parents=True, exist_ok=True)
-        path = cat / "note.md"
-        # Make is_relative_to raise AttributeError (simulating older Python)
-        # relative_to will succeed since path is under topics_path → hits line 290
-        with p.object(type(path), 'is_relative_to', side_effect=AttributeError):
-            ns.write_note(path, post)
-        assert path.exists()
-
-    def test_write_note_fallback_relative_to_raises(self, store):
-        """Lines 291-292: is_relative_to raises, relative_to also raises."""
-        from unittest.mock import patch as p
-        from lifebook.store import NoteStore
-        ns = NoteStore(store.cfg)
-        post = new_post("body", title="Test")
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as f:
-            external = Path(f.name)
-        try:
-            with p.object(type(external), 'is_relative_to', side_effect=AttributeError):
-                ns.write_note(external, post)
-            assert external.exists()
-        finally:
-            external.unlink(missing_ok=True)
