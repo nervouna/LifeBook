@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -62,6 +62,8 @@ class FeishuBot:
         self.writer = Writer(cfg, LLMClient(cfg.llm), store=self.store)
         self.transport = transport or FeishuTransport(cfg.feishu)
         self.indexer: Indexer | None = None
+        self._vector = None
+        self._thread_pool = ThreadPoolExecutor(max_workers=4)
 
     # ---------- message handling ----------
 
@@ -102,24 +104,24 @@ class FeishuBot:
             if not idea:
                 self.transport.reply_text(message_id, "[LifeBook] 请提供写作想法，例如：/write 我想写一篇关于AI对创意工作影响的文章")
                 return
-            threading.Thread(target=self._run_write_cmd, args=(message_id, idea), daemon=True).start()
+            self._thread_pool.submit(self._run_write_cmd, message_id, idea)
             return
 
         if stripped.startswith("/publish") or stripped == "publish":
             force = stripped in ("/publish!", "/publish --force")
-            threading.Thread(target=self._run_publish_cmd, args=(message_id, force), daemon=True).start()
+            self._thread_pool.submit(self._run_publish_cmd, message_id, force)
             return
 
         if stripped in ("/restore", "restore"):
-            threading.Thread(target=self._run_restore_cmd, args=(message_id,), daemon=True).start()
+            self._thread_pool.submit(self._run_restore_cmd, message_id)
             return
 
         if stripped in ("/process", "process"):
-            threading.Thread(target=self._run_process_cmd, args=(message_id,), daemon=True).start()
+            self._thread_pool.submit(self._run_process_cmd, message_id)
             return
 
         if stripped in ("/update-index", "update-index"):
-            threading.Thread(target=self._run_update_index_cmd, args=(message_id,), daemon=True).start()
+            self._thread_pool.submit(self._run_update_index_cmd, message_id)
             return
 
         if stripped.startswith("/search"):
@@ -127,7 +129,7 @@ class FeishuBot:
             if not query:
                 self.transport.reply_text(message_id, "[LifeBook] 请提供搜索词，例如：/search AI对创意工作的影响")
                 return
-            threading.Thread(target=self._run_search_cmd, args=(message_id, query), daemon=True).start()
+            self._thread_pool.submit(self._run_search_cmd, message_id, query)
             return
 
         if stripped in ("/status", "status"):
@@ -137,7 +139,7 @@ class FeishuBot:
         # --- Non-command messages ---
 
         if self.writer.active:
-            threading.Thread(target=self._run_writer_msg, args=(message_id, text), daemon=True).start()
+            self._thread_pool.submit(self._run_writer_msg, message_id, text)
             return
 
         urls = URL_RE.findall(text)
@@ -175,11 +177,7 @@ class FeishuBot:
             return
 
         self.transport.reply_text(message_id, "[LifeBook] 已收到图片，开始加工…")
-        threading.Thread(
-            target=self._process_and_reply,
-            args=(message_id, [p]),
-            daemon=True,
-        ).start()
+        self._thread_pool.submit(self._process_and_reply, message_id, [p])
 
     def _handle_url_message(self, message_id: str, text: str, urls: list[str]) -> None:
         ingested_paths: list[Path] = []
@@ -198,12 +196,7 @@ class FeishuBot:
         else:
             ack = f"[LifeBook] 已收到 {len(ingested_paths)} 个链接，开始加工…"
         self.transport.reply_text(message_id, ack)
-
-        threading.Thread(
-            target=self._process_and_reply,
-            args=(message_id, ingested_paths),
-            daemon=True,
-        ).start()
+        self._thread_pool.submit(self._process_and_reply, message_id, ingested_paths)
 
     def _handle_text_message(self, message_id: str, text: str) -> None:
         try:
@@ -214,11 +207,7 @@ class FeishuBot:
             return
 
         self.transport.reply_text(message_id, "[LifeBook] 已收到笔记，开始加工…")
-        threading.Thread(
-            target=self._process_and_reply,
-            args=(message_id, [p]),
-            daemon=True,
-        ).start()
+        self._thread_pool.submit(self._process_and_reply, message_id, [p])
 
     def _process_and_reply(self, message_id: str, paths: list[Path]) -> None:
         results: list[ProcessResult] = []
@@ -305,9 +294,10 @@ class FeishuBot:
 
     def _run_update_index_cmd(self, message_id: str) -> None:
         try:
-            from .indexer import Indexer
-            indexer = Indexer(self.cfg)
-            stats = indexer.incremental_update()
+            if self.indexer is None:
+                self.transport.reply_text(message_id, "[LifeBook] 索引器未初始化，请稍后重试")
+                return
+            stats = self.indexer.incremental_update()
 
             upserted = stats.get("upserted", 0)
             deleted = stats.get("deleted", 0)
@@ -329,10 +319,11 @@ class FeishuBot:
 
     def _run_search_cmd(self, message_id: str, query: str) -> None:
         try:
-            from .vector import VectorIndex
-            persist_dir = self.cfg.knowledge.state_path / "vector_store"
-            vector = VectorIndex(persist_dir)
-            results = vector.search(query, n_results=5)
+            if self._vector is None:
+                from .vector import VectorIndex
+                persist_dir = self.cfg.knowledge.state_path / "vector_store"
+                self._vector = VectorIndex(persist_dir)
+            results = self._vector.search(query, n_results=5)
 
             if not results:
                 self.transport.reply_text(message_id, f"[LifeBook] 未找到与 '{query}' 相关的内容")
@@ -367,9 +358,19 @@ class FeishuBot:
             logger.warning("Failed to start indexer: %s", e)
             self.indexer = None
 
+        try:
+            from .vector import VectorIndex
+            persist_dir = self.cfg.knowledge.state_path / "vector_store"
+            self._vector = VectorIndex(persist_dir)
+            logger.info("VectorIndex initialized")
+        except Exception as e:
+            logger.warning("Failed to init VectorIndex: %s", e)
+            self._vector = None
+
         self.transport.start(self._handle_message)
 
     def stop(self) -> None:
+        self._thread_pool.shutdown(wait=False, cancel_futures=True)
         if self.indexer is not None:
             self.indexer.stop()
             logger.info("Indexer stopped")

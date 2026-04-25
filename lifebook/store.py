@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import fcntl
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ class NoteStore:
     def __init__(self, cfg: KnowledgeConfig):
         self.cfg = cfg
         self._topic_cache: list[tuple[Path, dict, str, str]] | None = None
+        self._cache_lock = threading.Lock()
 
     # ---------- source (inbox) operations ----------
 
@@ -148,29 +150,30 @@ class NoteStore:
 
     def _load_topic_cache(self) -> list[tuple[Path, dict, str, str]]:
         """Load and cache topic notes metadata and content."""
-        if self._topic_cache is not None:
-            return self._topic_cache
+        with self._cache_lock:
+            if self._topic_cache is not None:
+                return self._topic_cache
 
-        root = self.cfg.topics_path
-        if not root.exists():
-            self._topic_cache = []
-            return self._topic_cache
+            root = self.cfg.topics_path
+            if not root.exists():
+                self._topic_cache = []
+                return self._topic_cache
 
-        cache = []
-        for md in root.rglob("*.md"):
-            try:
-                post = read_note(md)
-                title = post.get("title") or md.stem
-                # Store path, metadata dict, full title string, and content
-                cache.append((md, post.metadata, title, post.content))
-            except Exception:
-                continue
-        self._topic_cache = cache
-        return cache
+            cache = []
+            for md in root.rglob("*.md"):
+                try:
+                    post = read_note(md)
+                    title = post.get("title") or md.stem
+                    cache.append((md, post.metadata, title, post.content))
+                except Exception:
+                    continue
+            self._topic_cache = cache
+            return cache
 
     def _invalidate_topic_cache(self) -> None:
         """Invalidate the topic cache (e.g., after a write)."""
-        self._topic_cache = None
+        with self._cache_lock:
+            self._topic_cache = None
 
     def find_related(self, keywords: list[str], max_hits: int = 5) -> list[str]:
         """Scan topics/*/*.md; return titles whose title/tags/keywords match."""

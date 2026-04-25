@@ -18,6 +18,9 @@ def _make_bot():
     bot.transport = MagicMock()
     bot.transport.reply_text = MagicMock(return_value="mid")
     bot.store = MagicMock()
+    bot.indexer = None
+    bot._vector = None
+    bot._thread_pool = MagicMock()
     return bot
 
 
@@ -54,12 +57,10 @@ class TestWriteCommand:
 
     def test_write_with_idea_routes_thread(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading") as mock_t:
-            bot._handle_message(_make_event("/write 测试想法"))
-            mock_t.Thread.assert_called_once()
-            kw = mock_t.Thread.call_args[1]
-            assert kw["target"] == bot._run_write_cmd
-            assert kw["args"] == ("msg123", "测试想法")
+        bot._handle_message(_make_event("/write 测试想法"))
+        bot._thread_pool.submit.assert_called_once_with(
+            bot._run_write_cmd, "msg123", "测试想法",
+        )
 
 
 class TestPublishCommand:
@@ -72,9 +73,10 @@ class TestPublishCommand:
 
     def test_publish_routes_thread(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading") as mock_t:
-            bot._handle_message(_make_event("/publish"))
-            assert mock_t.Thread.call_args[1]["target"] == bot._run_publish_cmd
+        bot._handle_message(_make_event("/publish"))
+        bot._thread_pool.submit.assert_called_once_with(
+            bot._run_publish_cmd, "msg123", False,
+        )
 
 
 class TestWriterActiveRouting:
@@ -88,9 +90,10 @@ class TestWriterActiveRouting:
     def test_active_writer_routing_in_handle_message(self):
         bot = _make_bot()
         bot.writer.active = True
-        with patch("lifebook.feishu.threading") as mock_t:
-            bot._handle_message(_make_event("some text"))
-            assert mock_t.Thread.call_args[1]["target"] == bot._run_writer_msg
+        bot._handle_message(_make_event("some text"))
+        bot._thread_pool.submit.assert_called_once_with(
+            bot._run_writer_msg, "msg123", "some text",
+        )
 
     def test_inactive_writer_routes_to_ingest(self):
         bot = _make_bot()

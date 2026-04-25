@@ -18,6 +18,9 @@ def _make_bot():
     bot.transport = MagicMock()
     bot.transport.reply_text = MagicMock(return_value="mid")
     bot.store = MagicMock()
+    bot.indexer = None
+    bot._vector = None
+    bot._thread_pool = MagicMock()
     return bot
 
 
@@ -47,8 +50,7 @@ class TestImageMessageRouting:
 
         with patch("lifebook.feishu.ingest_image") as mock_ingest:
             mock_ingest.return_value = MagicMock()
-            with patch("lifebook.feishu.threading.Thread") as mock_thread:
-                bot._handle_message(evt)
+            bot._handle_message(evt)
 
         bot.transport.download_image_message.assert_called_once_with("msg123", "img_v2_test")
 
@@ -61,8 +63,7 @@ class TestImageMessageRouting:
 
         with patch("lifebook.feishu.ingest_image") as mock_ingest:
             mock_ingest.return_value = MagicMock()
-            with patch("lifebook.feishu.threading.Thread"):
-                bot._handle_message(evt)
+            bot._handle_message(evt)
 
         mock_ingest.assert_called_once()
         call_kwargs = mock_ingest.call_args
@@ -79,8 +80,7 @@ class TestImageMessageRouting:
 
         with patch("lifebook.feishu.ingest_image") as mock_ingest:
             mock_ingest.return_value = MagicMock()
-            with patch("lifebook.feishu.threading.Thread"):
-                bot._handle_message(evt)
+            bot._handle_message(evt)
 
         reply_text = bot.transport.reply_text.call_args[0][1]
         assert "图片" in reply_text
@@ -128,11 +128,9 @@ class TestImageMessageRouting:
 
         with patch("lifebook.feishu.ingest_image") as mock_ingest:
             mock_ingest.return_value = MagicMock()
-            with patch("lifebook.feishu.threading.Thread") as mock_thread:
-                bot._handle_message(evt)
+            bot._handle_message(evt)
 
-        mock_thread.assert_called_once()
-        assert mock_thread.call_args[1]["target"] == bot._process_and_reply
+        bot._thread_pool.submit.assert_called_once()
 
     def test_other_non_text_still_rejected(self):
         bot = _make_bot()
