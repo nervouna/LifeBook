@@ -1,6 +1,6 @@
 # LifeBook
 
-Personal knowledge base: inbox → LLM extraction → topic notes → vector index → podcast.
+Personal knowledge base: inbox → LLM extraction → topic notes → vector index → podcast. Includes a web workbench for browsing notes, semantic search, and an interactive writing agent.
 
 ## Setup
 
@@ -33,6 +33,9 @@ lifebook digest                   # generate daily digest
 lifebook podcast NOTE_PATH        # generate podcast from single note
 lifebook podcast NOTE_PATH --send # generate and send to Feishu
 lifebook podcast-multi --since 2026-04-22 --limit 10 --send  # combined episode
+lifebook web                      # start web UI (default: http://127.0.0.1:8080)
+lifebook web --port 9000          # custom port
+lifebook web --reload             # auto-reload for development
 ```
 
 ## Config
@@ -40,3 +43,20 @@ lifebook podcast-multi --since 2026-04-22 --limit 10 --send  # combined episode
 See `config.example.yaml`. Required keys: `llm` (API key + model), `knowledge.root`. Optional: `feishu`, `feishu_podcast`, `tavily`, `vision`, `tts`.
 
 Resolution order: `--config` flag → `LIFEBOOK_CONFIG` env → pointer file → default in knowledge root.
+
+## Web UI
+
+`lifebook web` starts a single-process server that serves both the REST API and a React SPA.
+
+```bash
+pip install -e .                  # web dependencies included
+lifebook web                      # http://127.0.0.1:8080
+```
+
+For frontend development with hot reload:
+
+```bash
+cd frontend && npm install && npm run dev   # http://localhost:5173 (proxies API to :8080)
+```
+
+Frontend build output goes to `lifebook/web/static/` and is served by FastAPI automatically.
