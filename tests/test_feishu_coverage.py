@@ -20,6 +20,8 @@ def _make_bot():
     bot.transport = MagicMock()
     bot.transport.reply_text = MagicMock(return_value="mid")
     bot.indexer = None
+    bot._vector = None
+    bot._thread_pool = MagicMock()
     return bot
 
 
@@ -261,39 +263,33 @@ class TestSlashCommands:
 
     def test_write_with_idea_starts_thread(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading.Thread") as MockThread:
-            bot._handle_message(_make_event("/write my idea"))
-        MockThread.assert_called_once()
+        bot._handle_message(_make_event("/write my idea"))
+        bot._thread_pool.submit.assert_called_once()
 
     def test_publish_starts_thread(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading.Thread") as MockThread:
-            bot._handle_message(_make_event("/publish"))
-        MockThread.assert_called_once()
+        bot._handle_message(_make_event("/publish"))
+        bot._thread_pool.submit.assert_called_once()
 
     def test_publish_force(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading.Thread") as MockThread:
-            bot._handle_message(_make_event("/publish!"))
-        MockThread.assert_called_once()
+        bot._handle_message(_make_event("/publish!"))
+        bot._thread_pool.submit.assert_called_once()
 
     def test_restore_starts_thread(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading.Thread") as MockThread:
-            bot._handle_message(_make_event("/restore"))
-        MockThread.assert_called_once()
+        bot._handle_message(_make_event("/restore"))
+        bot._thread_pool.submit.assert_called_once()
 
     def test_process_starts_thread(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading.Thread") as MockThread:
-            bot._handle_message(_make_event("/process"))
-        MockThread.assert_called_once()
+        bot._handle_message(_make_event("/process"))
+        bot._thread_pool.submit.assert_called_once()
 
     def test_update_index_starts_thread(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading.Thread") as MockThread:
-            bot._handle_message(_make_event("/update-index"))
-        MockThread.assert_called_once()
+        bot._handle_message(_make_event("/update-index"))
+        bot._thread_pool.submit.assert_called_once()
 
     def test_search_empty_shows_hint(self):
         bot = _make_bot()
@@ -303,9 +299,8 @@ class TestSlashCommands:
 
     def test_search_with_query_starts_thread(self):
         bot = _make_bot()
-        with patch("lifebook.feishu.threading.Thread") as MockThread:
-            bot._handle_message(_make_event("/search test query"))
-        MockThread.assert_called_once()
+        bot._handle_message(_make_event("/search test query"))
+        bot._thread_pool.submit.assert_called_once()
 
 
 class TestUrlAndTextMessages:
@@ -314,8 +309,7 @@ class TestUrlAndTextMessages:
         bot.writer.active = False
         with patch("lifebook.feishu.ingest_url") as mock_ingest:
             mock_ingest.return_value = Path("/fake/test.md")
-            with patch("lifebook.feishu.threading.Thread"):
-                bot._handle_message(_make_event("check https://example.com"))
+            bot._handle_message(_make_event("check https://example.com"))
         mock_ingest.assert_called_once()
 
     def test_url_message_ingest_error(self):
@@ -331,8 +325,7 @@ class TestUrlAndTextMessages:
         bot.writer.active = False
         with patch("lifebook.feishu.ingest_url") as mock_ingest:
             mock_ingest.return_value = Path("/fake/test.md")
-            with patch("lifebook.feishu.threading.Thread"):
-                bot._handle_message(_make_event("https://a.com https://b.com"))
+            bot._handle_message(_make_event("https://a.com https://b.com"))
         assert mock_ingest.call_count == 2
 
     def test_text_message_ingests(self):
@@ -340,8 +333,7 @@ class TestUrlAndTextMessages:
         bot.writer.active = False
         with patch("lifebook.feishu.ingest_text") as mock_ingest:
             mock_ingest.return_value = Path("/fake/test.md")
-            with patch("lifebook.feishu.threading.Thread"):
-                bot._handle_message(_make_event("just a note"))
+            bot._handle_message(_make_event("just a note"))
         mock_ingest.assert_called_once()
 
     def test_text_message_ingest_error(self):
@@ -355,9 +347,8 @@ class TestUrlAndTextMessages:
     def test_writing_mode_routes_to_writer(self):
         bot = _make_bot()
         bot.writer.active = True
-        with patch("lifebook.feishu.threading.Thread") as MockThread:
-            bot._handle_message(_make_event("feedback text"))
-        MockThread.assert_called_once()
+        bot._handle_message(_make_event("feedback text"))
+        bot._thread_pool.submit.assert_called_once()
 
 
 class TestProcessAndReply:
@@ -453,51 +444,27 @@ class TestRunCommands:
             "upserted": 3, "deleted": 1, "unchanged": 5,
             "errors": 4,
         }
-        with patch.dict(sys.modules, {
-            "chromadb": MagicMock(), "chromadb.config": MagicMock(),
-            "sentence_transformers": MagicMock(),
-        }):
-            with patch("lifebook.indexer.Indexer", return_value=mock_indexer_inst):
-                import importlib
-                import lifebook.feishu
-                importlib.reload(lifebook.feishu)
-                bot2 = _make_bot()
-                bot2._run_update_index_cmd("msg123")
-        bot2.transport.reply_text.assert_called()
-        reply = bot2.transport.reply_text.call_args[0][1]
+        bot.indexer = mock_indexer_inst
+        bot._run_update_index_cmd("msg123")
+        bot.transport.reply_text.assert_called()
+        reply = bot.transport.reply_text.call_args[0][1]
         assert "向量索引更新完成" in reply
 
-    def test_run_update_index_exception(self):
+    def test_run_update_index_not_initialized(self):
         bot = _make_bot()
-        with patch.dict(sys.modules, {
-            "chromadb": MagicMock(), "chromadb.config": MagicMock(),
-            "sentence_transformers": MagicMock(),
-        }):
-            with patch("lifebook.indexer.Indexer", side_effect=Exception("no chromadb")):
-                import importlib
-                import lifebook.feishu
-                importlib.reload(lifebook.feishu)
-                bot2 = _make_bot()
-                bot2._run_update_index_cmd("msg123")
-        bot2.transport.reply_text.assert_called()
-        assert "索引更新失败" in bot2.transport.reply_text.call_args[0][1]
+        bot.indexer = None
+        bot._run_update_index_cmd("msg123")
+        bot.transport.reply_text.assert_called()
+        assert "未初始化" in bot.transport.reply_text.call_args[0][1]
 
     def test_run_search_cmd_no_results(self):
         bot = _make_bot()
         mock_vi = MagicMock()
         mock_vi.search.return_value = []
-        with patch.dict(sys.modules, {
-            "chromadb": MagicMock(), "chromadb.config": MagicMock(),
-            "sentence_transformers": MagicMock(),
-        }):
-            with patch("lifebook.vector.VectorIndex", return_value=mock_vi):
-                import importlib
-                import lifebook.feishu
-                importlib.reload(lifebook.feishu)
-                bot2 = _make_bot()
-                bot2._run_search_cmd("msg123", "query")
-        bot2.transport.reply_text.assert_called()
-        assert "未找到" in bot2.transport.reply_text.call_args[0][1]
+        bot._vector = mock_vi
+        bot._run_search_cmd("msg123", "query")
+        bot.transport.reply_text.assert_called()
+        assert "未找到" in bot.transport.reply_text.call_args[0][1]
 
     def test_run_search_cmd_with_results(self):
         bot = _make_bot()
@@ -505,34 +472,20 @@ class TestRunCommands:
         mock_vi.search.return_value = [
             SimpleNamespace(doc_id="doc1", distance=0.2, metadata={"title": "Test"}, text="x" * 150),
         ]
-        with patch.dict(sys.modules, {
-            "chromadb": MagicMock(), "chromadb.config": MagicMock(),
-            "sentence_transformers": MagicMock(),
-        }):
-            with patch("lifebook.vector.VectorIndex", return_value=mock_vi):
-                import importlib
-                import lifebook.feishu
-                importlib.reload(lifebook.feishu)
-                bot2 = _make_bot()
-                bot2._run_search_cmd("msg123", "query")
-        bot2.transport.reply_text.assert_called()
-        reply = bot2.transport.reply_text.call_args[0][1]
+        bot._vector = mock_vi
+        bot._run_search_cmd("msg123", "query")
+        bot.transport.reply_text.assert_called()
+        reply = bot.transport.reply_text.call_args[0][1]
         assert "Test" in reply
 
     def test_run_search_cmd_exception(self):
         bot = _make_bot()
-        with patch.dict(sys.modules, {
-            "chromadb": MagicMock(), "chromadb.config": MagicMock(),
-            "sentence_transformers": MagicMock(),
-        }):
-            with patch("lifebook.vector.VectorIndex", side_effect=Exception("fail")):
-                import importlib
-                import lifebook.feishu
-                importlib.reload(lifebook.feishu)
-                bot2 = _make_bot()
-                bot2._run_search_cmd("msg123", "query")
-        bot2.transport.reply_text.assert_called()
-        assert "搜索失败" in bot2.transport.reply_text.call_args[0][1]
+        mock_vi = MagicMock()
+        mock_vi.search.side_effect = Exception("fail")
+        bot._vector = mock_vi
+        bot._run_search_cmd("msg123", "query")
+        bot.transport.reply_text.assert_called()
+        assert "搜索失败" in bot.transport.reply_text.call_args[0][1]
 
 
 class TestLifecycle:
@@ -540,43 +493,42 @@ class TestLifecycle:
         bot = _make_bot()
         mock_indexer_inst = MagicMock()
         mock_indexer_inst.start = MagicMock()
-        with patch.dict(sys.modules, {
-            "chromadb": MagicMock(), "chromadb.config": MagicMock(),
-            "sentence_transformers": MagicMock(),
-        }):
-            with patch("lifebook.indexer.Indexer", return_value=mock_indexer_inst):
-                import importlib
-                import lifebook.feishu
-                importlib.reload(lifebook.feishu)
-                bot2 = _make_bot()
-                bot2.start()
+        mock_vi = MagicMock()
+        with patch("lifebook.feishu.FeishuBot.start", wraps=bot.start):
+            with patch.dict(sys.modules, {
+                "chromadb": MagicMock(), "chromadb.config": MagicMock(),
+                "sentence_transformers": MagicMock(),
+            }):
+                with patch("lifebook.indexer.Indexer", return_value=mock_indexer_inst):
+                    with patch("lifebook.vector.VectorIndex", return_value=mock_vi):
+                        bot.start()
         mock_indexer_inst.start.assert_called_once()
-        bot2.transport.start.assert_called_once_with(bot2._handle_message)
+        bot.transport.start.assert_called_once_with(bot._handle_message)
 
     def test_start_indexer_fails(self):
         bot = _make_bot()
+        mock_vi = MagicMock()
         with patch.dict(sys.modules, {
             "chromadb": MagicMock(), "chromadb.config": MagicMock(),
             "sentence_transformers": MagicMock(),
         }):
             with patch("lifebook.indexer.Indexer", side_effect=Exception("no chromadb")):
-                import importlib
-                import lifebook.feishu
-                importlib.reload(lifebook.feishu)
-                bot2 = _make_bot()
-                bot2.start()
-        assert bot2.indexer is None
-        bot2.transport.start.assert_called_once()
+                with patch("lifebook.vector.VectorIndex", return_value=mock_vi):
+                    bot.start()
+        assert bot.indexer is None
+        bot.transport.start.assert_called_once()
 
     def test_stop(self):
         bot = _make_bot()
         mock_indexer = MagicMock()
         bot.indexer = mock_indexer
         bot.stop()
+        bot._thread_pool.shutdown.assert_called_once()
         mock_indexer.stop.assert_called_once()
         bot.transport.stop.assert_called_once()
 
     def test_stop_no_indexer(self):
         bot = _make_bot()
         bot.stop()
+        bot._thread_pool.shutdown.assert_called_once()
         bot.transport.stop.assert_called_once()
