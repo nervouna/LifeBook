@@ -43,14 +43,11 @@ class VectorIndex:
         """
         self.persist_dir = persist_dir
         self.model_name = model_name
-        
+        self._model = None
+
         # Create directory if it doesn't exist
         persist_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize embedding model
-        logger.info("Loading embedding model: %s", model_name)
-        self.model = SentenceTransformer(model_name)
-        
+
         # Initialize ChromaDB client
         self.client = chromadb.PersistentClient(
             path=str(persist_dir),
@@ -69,13 +66,23 @@ class VectorIndex:
             self.collection.count(),
         )
     
+    @property
+    def model(self) -> SentenceTransformer:
+        if self._model is None:
+            logger.info("Loading embedding model: %s", self.model_name)
+            self._model = SentenceTransformer(self.model_name)
+        return self._model
+
+    @model.setter
+    def model(self, value):
+        self._model = value
+
     def _embedding_function(self):
         """Create a ChromaDB-compatible embedding function."""
         def embed(texts: list[str]) -> list[list[float]]:
             """Embed a list of texts."""
             if not texts:
                 return []
-            # SentenceTransformer expects list of strings
             embeddings = self.model.encode(
                 texts,
                 normalize_embeddings=True,

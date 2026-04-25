@@ -583,9 +583,11 @@ class Writer:
         self.draft_path.write_text(content, encoding="utf-8")
 
     def _delete_draft(self) -> None:
-        """Delete all draft files (json, md, history)."""
+        """Delete all draft files (json, md, history, and backups)."""
         for p in [self.draft_meta_path, self.draft_path, self.history_path]:
             p.unlink(missing_ok=True)
+        self.draft_meta_path.with_suffix(".json.bak").unlink(missing_ok=True)
+        self.draft_path.with_suffix(".md.bak").unlink(missing_ok=True)
 
     def restore_draft(self) -> str:
         """Restore draft from backup. Returns status message."""
