@@ -1,7 +1,10 @@
 """Inbox service: listing, ingest, process orchestration."""
 from __future__ import annotations
 
+import json
+
 from lifebook.config import Config
+from lifebook.executor import Executor
 from lifebook.notes import read_note
 
 
@@ -46,3 +49,23 @@ class InboxService:
         else:
             path = ingest_text(self.cfg.knowledge, url_or_text, source_type=source_type, title_hint=title)
         return {"path": str(path.relative_to(self.cfg.knowledge.root))}
+
+    def process_single(self, rel_path: str):
+        executor = Executor(self.cfg)
+        full_path = self.cfg.knowledge.root / rel_path
+        if not full_path.is_file():
+            yield {"event": "error", "data": '{"message": "File not found"}'}
+            return
+        yield {"event": "progress", "data": '{"step": "start", "message": "开始处理..."}'}
+        result = executor.process_file(full_path)
+        if result.ok:
+            topic = (
+                str(result.topic_path.relative_to(self.cfg.knowledge.root))
+                if result.topic_path
+                else ""
+            )
+            yield {"event": "done", "data": json.dumps({"topic_path": topic})}
+        elif result.skipped_reason:
+            yield {"event": "done", "data": json.dumps({"skipped": result.skipped_reason})}
+        else:
+            yield {"event": "error", "data": json.dumps({"message": result.error or "unknown error"})}
