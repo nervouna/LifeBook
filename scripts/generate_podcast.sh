@@ -1,10 +1,10 @@
 #!/bin/bash
 # Generate daily podcast from yesterday's notes and send to Feishu.
-# Usage: crontab -e → 0 8 * * * /Users/damao/Projects/LifeBook/scripts/generate_podcast.sh
+# Usage: crontab -e → 0 8 * * * /Users/damao/Develop/Projects/LifeBook/scripts/generate_podcast.sh
 
 set -euo pipefail
 
-PROJECT_DIR="/Users/damao/Projects/LifeBook"
+PROJECT_DIR="/Users/damao/Develop/Projects/LifeBook"
 YESTERDAY=$(date -v-1d +%Y-%m-%d)
 LOG_FILE="${PROJECT_DIR}/logs/podcast_${YESTERDAY}.log"
 

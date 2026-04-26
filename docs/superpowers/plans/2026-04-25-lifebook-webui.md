@@ -1600,7 +1600,7 @@ git commit -m "feat: add inbox process SSE endpoint"
 
 Run:
 ```bash
-cd /Users/damao/Projects/LifeBook
+cd /Users/damao/Develop/Projects/LifeBook
 npm create vite@latest frontend -- --template react-ts
 cd frontend
 npm install
@@ -1610,7 +1610,7 @@ npm install
 
 Run:
 ```bash
-cd /Users/damao/Projects/LifeBook/frontend
+cd /Users/damao/Develop/Projects/LifeBook/frontend
 npm install -D tailwindcss @tailwindcss/vite
 ```
 
@@ -1643,7 +1643,7 @@ Replace `src/index.css` with:
 
 Run:
 ```bash
-cd /Users/damao/Projects/LifeBook/frontend
+cd /Users/damao/Develop/Projects/LifeBook/frontend
 npm install -D @types/node
 npx shadcn@latest init
 ```
@@ -1845,7 +1845,7 @@ createRoot(document.getElementById("root")!).render(
 
 Run:
 ```bash
-cd /Users/damao/Projects/LifeBook/frontend
+cd /Users/damao/Develop/Projects/LifeBook/frontend
 npm run build
 ls ../lifebook/web/static/
 ```
