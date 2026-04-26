@@ -13,7 +13,7 @@ export default function DashboardPage() {
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-bold">概览</h1>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">笔记总数</CardTitle></CardHeader>
           <CardContent><div className="text-3xl font-bold">{stats.data?.topic_count ?? "—"}</div></CardContent>
@@ -30,7 +30,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">分类</CardTitle></CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-2">
               {stats.data?.categories?.map((c) => (
                 <Badge key={c} variant="secondary">{c}</Badge>
               ))}
