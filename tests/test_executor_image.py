@@ -34,6 +34,9 @@ def mock_config(tmp_path):
     cfg.knowledge.categories = list(DEFAULT_CATEGORIES)
     cfg.executor.classify_min_confidence = 0.5
     cfg.executor.batch_limit = 20
+    cfg.executor.max_retries = 3
+    cfg.executor.max_workers = 4
+    cfg.executor.processing_delay = 0.0
     cfg.image = ImageConfig()
     cfg.llm = MagicMock()
     cfg.llm.model = "test-model"

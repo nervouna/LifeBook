@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +34,7 @@ STANDARD_SOURCE_FIELDS = frozenset({
     "image_path", "image_hash", "image_mime",
     "image_original_bytes", "image_compressed_bytes",
     "image_width", "image_height",
+    "retry_count",
 })
 
 
@@ -104,26 +107,13 @@ class Executor:
         if llm_err:
             return llm_err
 
-        # Step 5: validate
-        conf = float(extracted.get("confidence", 0))
-        val_err = self._validate(extracted, conf, post, source_path)
-        if val_err:
-            return val_err
-
-        # Step 6: link + compose topic
+        # Steps 5-8: validate, compose, write topic, mark processed
         extra_meta = self._extra_meta(post)
-        topic_body = self._compose_topic_body(
-            summary=extracted["summary"],
-            key_points=extracted["key_points"],
-            narrative=self._link_related(extracted),
-            source_url=url,
+        topic_path, err = self._finalize_extraction(
+            source_path, extracted, post.get("source_type") or "", url, extra_meta,
         )
-
-        # Step 7: write topic
-        topic_path = self._write_topic(extracted, conf, source_path, url, extra_meta, topic_body)
-
-        # Step 8: update source
-        self._mark_processed(source_path, post, topic_path, extracted)
+        if err:
+            return err
 
         logger.info("  -> %s", topic_path.relative_to(self.cfg.knowledge.root))
         return ProcessResult(source_path, True, topic_path=topic_path)
@@ -135,12 +125,71 @@ class Executor:
         if len(files) > limit:
             logger.info("inbox has %d, processing first %d", len(files), limit)
             files = files[:limit]
-        results = []
-        for p in files:
-            results.append(self.process_file(p))
+        max_workers = self.cfg.executor.max_workers
+        delay = self.cfg.executor.processing_delay
+        results: list[ProcessResult] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {}
+            for p in files:
+                futures[pool.submit(self.process_file, p)] = p
+                if delay > 0:
+                    time.sleep(delay)
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    src = futures[future]
+                    results.append(ProcessResult(src, False, error=str(e)))
         return results
 
+    def retry_failed(self) -> int:
+        """Reset all fetch_failed files back to inbox. Returns count of files reset."""
+        root = self.cfg.knowledge.sources_path
+        if not root.exists():
+            return 0
+        count = 0
+        for p in sorted(root.glob("*.md")):
+            try:
+                post = self.store.read_note(p)
+            except (FileNotFoundError, UnicodeDecodeError, ValueError):
+                continue
+            if post.get("status") == "fetch_failed":
+                post["status"] = "inbox"
+                post.metadata.pop("retry_count", None)
+                self.store.write_note(p, post)
+                count += 1
+        return count
+
     # ---------- pipeline steps ----------
+
+    def _finalize_extraction(
+        self,
+        source_path: Path,
+        extracted: dict,
+        source_type: str,
+        url: str,
+        extra_meta: dict,
+    ) -> tuple[Path, None] | tuple[None, ProcessResult]:
+        """Shared finalization: validate, compose topic, write, and mark processed.
+
+        Returns (topic_path, None) on success or (None, error_ProcessResult) on failure.
+        """
+        conf = float(extracted.get("confidence", 0))
+        post = self.store.read_note(source_path)
+
+        val_err = self._validate(extracted, conf, post, source_path)
+        if val_err:
+            return None, val_err
+
+        topic_body = self._compose_topic_body(
+            summary=extracted["summary"],
+            key_points=extracted["key_points"],
+            narrative=self._link_related(extracted),
+            source_url=url,
+        )
+        topic_path = self._write_topic(extracted, conf, source_path, url, extra_meta, topic_body)
+        self._mark_processed(source_path, post, topic_path, extracted)
+        return topic_path, None
 
     def _process_image_file(self, source_path: Path, post: frontmatter.Post) -> ProcessResult:
         """Process an image source file: compress, extract, write topic."""
@@ -172,20 +221,12 @@ class Executor:
         if llm_err:
             return llm_err
 
-        conf = float(extracted.get("confidence", 0))
-        val_err = self._validate(extracted, conf, post, source_path)
-        if val_err:
-            return val_err
-
         extra_meta = self._extra_meta(post)
-        topic_body = self._compose_topic_body(
-            summary=extracted["summary"],
-            key_points=extracted["key_points"],
-            narrative=self._link_related(extracted),
-            source_url="",
+        topic_path, err = self._finalize_extraction(
+            source_path, extracted, "image", "", extra_meta,
         )
-        topic_path = self._write_topic(extracted, conf, source_path, "", extra_meta, topic_body)
-        self._mark_processed(source_path, post, topic_path, extracted)
+        if err:
+            return err
 
         logger.info("  -> %s", topic_path.relative_to(self.cfg.knowledge.root))
         return ProcessResult(source_path, True, topic_path=topic_path)
@@ -254,7 +295,19 @@ class Executor:
             return content, None
         fr = self.fetcher.fetch(url)
         if not fr.ok:
-            post["status"] = fr.status
+            retry_count = int(post.get("retry_count") or 0)
+            max_retries = self.cfg.executor.max_retries
+            if retry_count < max_retries:
+                post["retry_count"] = retry_count + 1
+                post["status"] = "inbox"
+                post["fetch_error"] = fr.error or ""
+                post["fetch_at"] = now_iso()
+                self.store.write_note(source_path, post)
+                return "", ProcessResult(
+                    source_path, False,
+                    skipped_reason=f"retry {retry_count + 1}/{max_retries}: {fr.error}",
+                )
+            post["status"] = "fetch_failed"
             post["fetch_error"] = fr.error or ""
             post["fetch_at"] = now_iso()
             self.store.write_note(source_path, post)
