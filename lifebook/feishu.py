@@ -1,20 +1,19 @@
-"""Feishu bot: command routing and business logic."""
+"""Feishu bot: thin coordinator delegating to CommandRouter and MessageHandler."""
 from __future__ import annotations
 
 import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 
 from .config import Config
-from .executor import Executor, ProcessResult
+from .executor import Executor
+from .feishu_commands import CommandRouter
+from .feishu_handler import MessageHandler
 from .feishu_transport import FeishuTransport
-from .image_processor import detect_mime_type
-from .ingest import ingest_image, ingest_text, ingest_url
 from .store import NoteStore
 from .writer import Writer
 
@@ -23,7 +22,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-URL_RE = re.compile(r"https?://[^\s\u3000，,;；。！？]+", re.IGNORECASE)
+URL_RE = re.compile(r"https?://[^\s　，,;；。！？]+", re.IGNORECASE)
+
+BACKPRESSURE_CMDS = frozenset({"process", "update-index"})
 
 
 def _extract_text(content_json: str) -> str:
@@ -64,6 +65,19 @@ class FeishuBot:
         self.indexer: Indexer | None = None
         self._vector = None
         self._thread_pool = ThreadPoolExecutor(max_workers=4)
+        self._in_flight: set[str] = set()
+
+        self._cmd_router = CommandRouter(
+            transport=self.transport,
+            writer=self.writer,
+            executor=self.executor,
+            cfg=cfg,
+        )
+        self._msg_handler = MessageHandler(
+            transport=self.transport,
+            cfg=cfg,
+            thread_pool=self._thread_pool,
+        )
 
     # ---------- message handling ----------
 
@@ -77,12 +91,11 @@ class FeishuBot:
 
         msg_type = msg.message_type
         message_id = msg.message_id
-        chat_id = msg.chat_id
 
-        logger.info("received msg_type=%s id=%s chat=%s", msg_type, message_id, chat_id)
+        logger.info("received msg_type=%s id=%s chat=%s", msg_type, msg_type, msg.chat_id)
 
         if msg_type == "image":
-            self._handle_image_message(message_id, msg.content)
+            self._msg_handler.handle_image_message(message_id, msg.content)
             return
 
         if msg_type != "text":
@@ -102,34 +115,47 @@ class FeishuBot:
         if stripped.startswith("/write"):
             idea = stripped[len("/write"):].strip()
             if not idea:
-                self.transport.reply_text(message_id, "[LifeBook] 请提供写作想法，例如：/write 我想写一篇关于AI对创意工作影响的文章")
+                self.transport.reply_text(
+                    message_id,
+                    "[LifeBook] 请提供写作想法，例如：/write 我想写一篇关于AI对创意工作影响的文章",
+                )
                 return
-            self._thread_pool.submit(self._run_write_cmd, message_id, idea)
+            self._thread_pool.submit(self._cmd_router.dispatch_write, message_id, idea)
             return
 
         if stripped.startswith("/publish") or stripped == "publish":
             force = stripped in ("/publish!", "/publish --force")
-            self._thread_pool.submit(self._run_publish_cmd, message_id, force)
+            self._thread_pool.submit(self._cmd_router.dispatch_publish, message_id, force)
             return
 
         if stripped in ("/restore", "restore"):
-            self._thread_pool.submit(self._run_restore_cmd, message_id)
+            self._thread_pool.submit(self._cmd_router.dispatch_restore, message_id)
             return
 
         if stripped in ("/process", "process"):
-            self._thread_pool.submit(self._run_process_cmd, message_id)
+            if "process" in self._in_flight:
+                self.transport.reply_text(message_id, "[LifeBook] 正在执行加工任务，请稍后再试。")
+                return
+            self._in_flight.add("process")
+            self._thread_pool.submit(self._run_with_backpressure, "process", self._cmd_router.dispatch_process, message_id)
             return
 
         if stripped in ("/update-index", "update-index"):
-            self._thread_pool.submit(self._run_update_index_cmd, message_id)
+            if "update-index" in self._in_flight:
+                self.transport.reply_text(message_id, "[LifeBook] 正在执行索引更新，请稍后再试。")
+                return
+            self._in_flight.add("update-index")
+            self._thread_pool.submit(self._run_with_backpressure, "update-index", self._cmd_router.dispatch_update_index, message_id, self.indexer)
             return
 
         if stripped.startswith("/search"):
             query = stripped[len("/search"):].strip()
             if not query:
-                self.transport.reply_text(message_id, "[LifeBook] 请提供搜索词，例如：/search AI对创意工作的影响")
+                self.transport.reply_text(
+                    message_id, "[LifeBook] 请提供搜索词，例如：/search AI对创意工作的影响"
+                )
                 return
-            self._thread_pool.submit(self._run_search_cmd, message_id, query)
+            self._thread_pool.submit(self._cmd_router.dispatch_search, message_id, query, self._vector)
             return
 
         if stripped in ("/status", "status"):
@@ -139,111 +165,21 @@ class FeishuBot:
         # --- Non-command messages ---
 
         if self.writer.active:
-            self._thread_pool.submit(self._run_writer_msg, message_id, text)
+            self._thread_pool.submit(self._cmd_router.dispatch_writer_message, message_id, text)
             return
 
         urls = URL_RE.findall(text)
         if urls:
-            self._handle_url_message(message_id, text, urls)
+            self._msg_handler.handle_url_message(message_id, text, urls)
         else:
-            self._handle_text_message(message_id, text)
+            self._msg_handler.handle_text_message(message_id, text)
 
-    def _handle_image_message(self, message_id: str, content_json: str) -> None:
-        """Download the image from Feishu and ingest it for processing."""
+    def _run_with_backpressure(self, cmd: str, fn, *args) -> None:
+        """Run a command and remove it from in_flight when done."""
         try:
-            content_obj = json.loads(content_json)
-        except Exception:
-            content_obj = {}
-        image_key = content_obj.get("image_key") or ""
-        if not image_key:
-            self.transport.reply_text(message_id, "[LifeBook] 图片消息缺少 image_key，无法下载。")
-            return
-
-        image_bytes = self.transport.download_image_message(message_id, image_key)
-        if not image_bytes:
-            self.transport.reply_text(message_id, "[LifeBook] 图片下载失败，请稍后重试。")
-            return
-
-        try:
-            mime_type = detect_mime_type(image_bytes)
-            p = ingest_image(
-                self.cfg.knowledge,
-                image_bytes=image_bytes,
-                mime_type=mime_type,
-            )
-        except Exception as e:
-            logger.exception("ingest_image failed")
-            self.transport.reply_text(message_id, f"[LifeBook] 图片录入失败：{e}")
-            return
-
-        self.transport.reply_text(message_id, "[LifeBook] 已收到图片，开始加工…")
-        self._thread_pool.submit(self._process_and_reply, message_id, [p])
-
-    def _handle_url_message(self, message_id: str, text: str, urls: list[str]) -> None:
-        ingested_paths: list[Path] = []
-        for url in urls:
-            url = url.rstrip(").,;!?")
-            try:
-                p = ingest_url(self.cfg.knowledge, url, source_type="chat_link")
-                ingested_paths.append(p)
-            except Exception as e:
-                logger.exception("ingest_url failed: %s", url)
-                self.transport.reply_text(message_id, f"[LifeBook] 录入失败：{url}\n错误：{e}")
-                return
-
-        if len(ingested_paths) == 1:
-            ack = f"[LifeBook] 已收到链接，开始加工…"
-        else:
-            ack = f"[LifeBook] 已收到 {len(ingested_paths)} 个链接，开始加工…"
-        self.transport.reply_text(message_id, ack)
-        self._thread_pool.submit(self._process_and_reply, message_id, ingested_paths)
-
-    def _handle_text_message(self, message_id: str, text: str) -> None:
-        try:
-            p = ingest_text(self.cfg.knowledge, text, source_type="chat_note")
-        except Exception as e:
-            logger.exception("ingest_text failed")
-            self.transport.reply_text(message_id, f"[LifeBook] 录入失败：{e}")
-            return
-
-        self.transport.reply_text(message_id, "[LifeBook] 已收到笔记，开始加工…")
-        self._thread_pool.submit(self._process_and_reply, message_id, [p])
-
-    def _process_and_reply(self, message_id: str, paths: list[Path]) -> None:
-        results: list[ProcessResult] = []
-        for p in paths:
-            try:
-                results.append(self.executor.process_file(p))
-            except Exception as e:
-                logger.exception("process_file failed: %s", p)
-                results.append(ProcessResult(p, False, error=str(e)))
-
-        self.transport.reply_text(message_id, self._format_results(results))
-
-    def _run_process_cmd(self, message_id: str) -> None:
-        results = self.executor.process_inbox()
-        if not results:
-            self.transport.reply_text(message_id, "[LifeBook] Inbox 为空，没有待加工条目。")
-            return
-        self.transport.reply_text(message_id, self._format_results(results, show_summary=True))
-
-    def _format_results(self, results: list[ProcessResult], show_summary: bool = False) -> str:
-        lines = []
-        if show_summary:
-            ok = sum(1 for r in results if r.ok)
-            sk = sum(1 for r in results if r.skipped_reason)
-            fl = len(results) - ok - sk
-            lines.append(f"[LifeBook] 加工完成：{ok} 成功 / {sk} 跳过 / {fl} 失败\n")
-
-        for r in results:
-            if r.ok and r.topic_path:
-                rel = r.topic_path.relative_to(self.cfg.knowledge.root)
-                lines.append(f"✓ 已归档到 {rel}")
-            elif r.skipped_reason:
-                lines.append(f"⊘ 跳过：{r.skipped_reason}")
-            else:
-                lines.append(f"✗ 失败：{r.error}")
-        return "\n".join(lines) if lines else "[LifeBook] 没有结果。"
+            fn(*args)
+        finally:
+            self._in_flight.discard(cmd)
 
     def _reply_status(self, message_id: str) -> None:
         inbox = self.store.scan_inbox()
@@ -259,92 +195,6 @@ class FeishuBot:
             f"  发送 /process 手动加工 inbox\n"
             f"  发送 /write <想法> 进入写作模式",
         )
-
-    def _run_write_cmd(self, message_id: str, idea: str) -> None:
-        try:
-            reply = self.writer.start(idea)
-        except Exception as e:
-            logger.exception("writer.start failed")
-            reply = f"[LifeBook] 写作启动失败：{e}"
-        self.transport.reply_text(message_id, reply)
-
-    def _run_publish_cmd(self, message_id: str, force: bool = False) -> None:
-        try:
-            reply = self.writer.publish(force=force)
-        except Exception as e:
-            logger.exception("writer.publish failed")
-            reply = f"[LifeBook] 发布失败：{e}"
-        self.transport.reply_text(message_id, reply)
-
-    def _run_writer_msg(self, message_id: str, text: str) -> None:
-        try:
-            reply = self.writer.handle_message(text)
-        except Exception as e:
-            logger.exception("writer.handle_message failed")
-            reply = f"[LifeBook] 写作处理失败：{e}"
-        self.transport.reply_text(message_id, reply)
-
-    def _run_restore_cmd(self, message_id: str) -> None:
-        try:
-            reply = self.writer.restore_draft()
-        except Exception as e:
-            logger.exception("writer.restore_draft failed")
-            reply = f"[LifeBook] 恢复失败：{e}"
-        self.transport.reply_text(message_id, reply)
-
-    def _run_update_index_cmd(self, message_id: str) -> None:
-        try:
-            if self.indexer is None:
-                self.transport.reply_text(message_id, "[LifeBook] 索引器未初始化，请稍后重试")
-                return
-            stats = self.indexer.incremental_update()
-
-            upserted = stats.get("upserted", 0)
-            deleted = stats.get("deleted", 0)
-            unchanged = stats.get("unchanged", 0)
-            errors = stats.get("errors", 0)
-
-            reply = f"[LifeBook] 向量索引更新完成\n"
-            reply += f"  新增/更新: {upserted}\n"
-            reply += f"  删除: {deleted}\n"
-            reply += f"  未变化: {unchanged}\n"
-            if errors:
-                reply += f"  错误: {errors} 个\n"
-
-        except Exception as e:
-            logger.exception("update-index failed")
-            reply = f"[LifeBook] 索引更新失败：{e}"
-
-        self.transport.reply_text(message_id, reply)
-
-    def _run_search_cmd(self, message_id: str, query: str) -> None:
-        try:
-            if self._vector is None:
-                from .vector import VectorIndex
-                persist_dir = self.cfg.knowledge.vector_store_path
-                self._vector = VectorIndex(persist_dir)
-            results = self._vector.search(query, n_results=5)
-
-            if not results:
-                self.transport.reply_text(message_id, f"[LifeBook] 未找到与 '{query}' 相关的内容")
-                return
-
-            reply = f"[LifeBook] 搜索 '{query}' 结果（显示前 {len(results)} 个）:\n\n"
-            for i, r in enumerate(results, 1):
-                title = r.metadata.get("title", r.doc_id)
-                similarity = max(0, 1.0 - r.distance) * 100
-                preview = r.text[:100] + "..." if len(r.text) > 100 else r.text
-
-                reply += f"{i}. {title}\n"
-                reply += f"   相似度: {similarity:.1f}%\n"
-                reply += f"   路径: {r.doc_id}\n"
-                reply += f"   摘要: {preview}\n\n"
-
-        except Exception as e:
-            logger.exception("search failed")
-            reply = f"[LifeBook] 搜索失败：{e}"
-
-        self.transport.reply_text(message_id, reply)
 
     # ---------- lifecycle ----------
 

@@ -12,6 +12,8 @@ import pytest
 
 def _make_bot():
     from lifebook.feishu import FeishuBot
+    from lifebook.feishu_commands import CommandRouter
+    from lifebook.feishu_handler import MessageHandler
     bot = FeishuBot.__new__(FeishuBot)
     bot.cfg = MagicMock()
     bot.store = MagicMock()
@@ -22,6 +24,18 @@ def _make_bot():
     bot.indexer = None
     bot._vector = None
     bot._thread_pool = MagicMock()
+    bot._in_flight = set()
+    bot._cmd_router = CommandRouter(
+        transport=bot.transport,
+        writer=bot.writer,
+        executor=bot.executor,
+        cfg=bot.cfg,
+    )
+    bot._msg_handler = MessageHandler(
+        transport=bot.transport,
+        cfg=bot.cfg,
+        thread_pool=bot._thread_pool,
+    )
     return bot
 
 
@@ -307,7 +321,7 @@ class TestUrlAndTextMessages:
     def test_url_message_ingests_and_processes(self):
         bot = _make_bot()
         bot.writer.active = False
-        with patch("lifebook.feishu.ingest_url") as mock_ingest:
+        with patch("lifebook.feishu_handler.ingest_url") as mock_ingest:
             mock_ingest.return_value = Path("/fake/test.md")
             bot._handle_message(_make_event("check https://example.com"))
         mock_ingest.assert_called_once()
@@ -315,7 +329,7 @@ class TestUrlAndTextMessages:
     def test_url_message_ingest_error(self):
         bot = _make_bot()
         bot.writer.active = False
-        with patch("lifebook.feishu.ingest_url", side_effect=Exception("fail")):
+        with patch("lifebook.feishu_handler.ingest_url", side_effect=Exception("fail")):
             bot._handle_message(_make_event("check https://example.com"))
         bot.transport.reply_text.assert_called()
         assert "录入失败" in str(bot.transport.reply_text.call_args)
@@ -323,7 +337,7 @@ class TestUrlAndTextMessages:
     def test_multiple_urls(self):
         bot = _make_bot()
         bot.writer.active = False
-        with patch("lifebook.feishu.ingest_url") as mock_ingest:
+        with patch("lifebook.feishu_handler.ingest_url") as mock_ingest:
             mock_ingest.return_value = Path("/fake/test.md")
             bot._handle_message(_make_event("https://a.com https://b.com"))
         assert mock_ingest.call_count == 2
@@ -331,7 +345,7 @@ class TestUrlAndTextMessages:
     def test_text_message_ingests(self):
         bot = _make_bot()
         bot.writer.active = False
-        with patch("lifebook.feishu.ingest_text") as mock_ingest:
+        with patch("lifebook.feishu_handler.ingest_text") as mock_ingest:
             mock_ingest.return_value = Path("/fake/test.md")
             bot._handle_message(_make_event("just a note"))
         mock_ingest.assert_called_once()
@@ -339,7 +353,7 @@ class TestUrlAndTextMessages:
     def test_text_message_ingest_error(self):
         bot = _make_bot()
         bot.writer.active = False
-        with patch("lifebook.feishu.ingest_text", side_effect=Exception("fail")):
+        with patch("lifebook.feishu_handler.ingest_text", side_effect=Exception("fail")):
             bot._handle_message(_make_event("just a note"))
         bot.transport.reply_text.assert_called()
         assert "录入失败" in str(bot.transport.reply_text.call_args)
@@ -353,139 +367,195 @@ class TestUrlAndTextMessages:
 
 class TestProcessAndReply:
     def test_process_and_reply_ok(self):
-        bot = _make_bot()
+        from lifebook.feishu_handler import MessageHandler
         from lifebook.executor import ProcessResult
-        bot.executor.process_file.return_value = ProcessResult(
-            Path("/fake/test.md"), True, topic_path=Path("/fake/topics/test.md"),
-        )
-        bot.cfg.knowledge.root = Path("/fake")
-        bot._process_and_reply("msg123", [Path("/fake/test.md")])
-        bot.transport.reply_text.assert_called()
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        cfg = MagicMock()
+        tp = MagicMock()
+        handler = MessageHandler(transport=transport, cfg=cfg, thread_pool=tp)
+
+        with patch("lifebook.executor.Executor") as MockExec:
+            mock_exec = MockExec.return_value
+            mock_exec.process_file.return_value = ProcessResult(
+                Path("/fake/test.md"), True, topic_path=Path("/fake/topics/test.md"),
+            )
+            cfg.knowledge.root = Path("/fake")
+            handler._process_and_reply("msg123", [Path("/fake/test.md")])
+        transport.reply_text.assert_called()
 
     def test_process_and_reply_exception(self):
-        bot = _make_bot()
-        bot.executor.process_file.side_effect = Exception("crash")
-        bot._process_and_reply("msg123", [Path("/fake/test.md")])
-        bot.transport.reply_text.assert_called()
-        assert "失败" in bot.transport.reply_text.call_args[0][1]
+        from lifebook.feishu_handler import MessageHandler
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        cfg = MagicMock()
+        tp = MagicMock()
+        handler = MessageHandler(transport=transport, cfg=cfg, thread_pool=tp)
+
+        with patch("lifebook.executor.Executor") as MockExec:
+            mock_exec = MockExec.return_value
+            mock_exec.process_file.side_effect = Exception("crash")
+            handler._process_and_reply("msg123", [Path("/fake/test.md")])
+        transport.reply_text.assert_called()
+        assert "失败" in transport.reply_text.call_args[0][1]
 
 
 class TestFormatResults:
     def test_empty_results(self):
-        bot = _make_bot()
-        result = bot._format_results([])
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=MagicMock())
+        result = router._format_results([])
         assert "没有结果" in result
 
     def test_show_summary(self):
-        bot = _make_bot()
+        from lifebook.feishu_commands import CommandRouter
         from lifebook.executor import ProcessResult
-        bot.cfg.knowledge.root = Path("/fake")
+        transport = MagicMock()
+        cfg = MagicMock()
+        cfg.knowledge.root = Path("/fake")
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=MagicMock(), cfg=cfg)
         results = [
             ProcessResult(Path("a"), True, topic_path=Path("/fake/t/a")),
             ProcessResult(Path("b"), False, skipped_reason="dup"),
             ProcessResult(Path("c"), False, error="fail"),
         ]
-        result = bot._format_results(results, show_summary=True)
+        result = router._format_results(results, show_summary=True)
         assert "成功" in result
         assert "跳过" in result
         assert "失败" in result
 
 
 class TestRunCommands:
-    def test_run_write_cmd_exception(self):
-        bot = _make_bot()
-        bot.writer.start.side_effect = Exception("crash")
-        bot._run_write_cmd("msg123", "idea")
-        bot.transport.reply_text.assert_called()
-        assert "写作启动失败" in bot.transport.reply_text.call_args[0][1]
+    def test_dispatch_write_exception(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        writer = MagicMock()
+        writer.start.side_effect = Exception("crash")
+        router = CommandRouter(transport=transport, writer=writer, executor=MagicMock())
+        router.dispatch_write("msg123", "idea")
+        transport.reply_text.assert_called()
+        assert "操作失败" in transport.reply_text.call_args[0][1]
 
-    def test_run_publish_cmd_exception(self):
-        bot = _make_bot()
-        bot.writer.publish.side_effect = Exception("crash")
-        bot._run_publish_cmd("msg123")
-        bot.transport.reply_text.assert_called()
-        assert "发布失败" in bot.transport.reply_text.call_args[0][1]
+    def test_dispatch_publish_exception(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        writer = MagicMock()
+        writer.publish.side_effect = Exception("crash")
+        router = CommandRouter(transport=transport, writer=writer, executor=MagicMock())
+        router.dispatch_publish("msg123")
+        transport.reply_text.assert_called()
+        assert "操作失败" in transport.reply_text.call_args[0][1]
 
-    def test_run_writer_msg_exception(self):
-        bot = _make_bot()
-        bot.writer.handle_message.side_effect = Exception("crash")
-        bot._run_writer_msg("msg123", "text")
-        bot.transport.reply_text.assert_called()
-        assert "写作处理失败" in bot.transport.reply_text.call_args[0][1]
+    def test_dispatch_writer_message_exception(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        writer = MagicMock()
+        writer.handle_message.side_effect = Exception("crash")
+        router = CommandRouter(transport=transport, writer=writer, executor=MagicMock())
+        router.dispatch_writer_message("msg123", "text")
+        transport.reply_text.assert_called()
+        assert "操作失败" in transport.reply_text.call_args[0][1]
 
-    def test_run_restore_cmd_exception(self):
-        bot = _make_bot()
-        bot.writer.restore_draft.side_effect = Exception("crash")
-        bot._run_restore_cmd("msg123")
-        bot.transport.reply_text.assert_called()
-        assert "恢复失败" in bot.transport.reply_text.call_args[0][1]
+    def test_dispatch_restore_exception(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        writer = MagicMock()
+        writer.restore_draft.side_effect = Exception("crash")
+        router = CommandRouter(transport=transport, writer=writer, executor=MagicMock())
+        router.dispatch_restore("msg123")
+        transport.reply_text.assert_called()
+        assert "操作失败" in transport.reply_text.call_args[0][1]
 
-    def test_run_process_cmd_empty(self):
-        bot = _make_bot()
-        bot.executor.process_inbox.return_value = []
-        bot._run_process_cmd("msg123")
-        bot.transport.reply_text.assert_called()
-        assert "为空" in bot.transport.reply_text.call_args[0][1]
+    def test_dispatch_process_empty(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        executor = MagicMock()
+        executor.process_inbox.return_value = []
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=executor)
+        router.dispatch_process("msg123")
+        transport.reply_text.assert_called()
+        assert "为空" in transport.reply_text.call_args[0][1]
 
-    def test_run_process_cmd_with_results(self):
-        bot = _make_bot()
+    def test_dispatch_process_with_results(self):
+        from lifebook.feishu_commands import CommandRouter
         from lifebook.executor import ProcessResult
-        bot.executor.process_inbox.return_value = [
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        executor = MagicMock()
+        executor.process_inbox.return_value = [
             ProcessResult(Path("a"), True, topic_path=Path("/fake/t/a")),
         ]
-        bot.cfg.knowledge.root = Path("/fake")
-        bot._run_process_cmd("msg123")
-        bot.transport.reply_text.assert_called()
+        cfg = MagicMock()
+        cfg.knowledge.root = Path("/fake")
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=executor, cfg=cfg)
+        router.dispatch_process("msg123")
+        transport.reply_text.assert_called()
 
-    def test_run_update_index_success(self):
-        bot = _make_bot()
+    def test_dispatch_update_index_success(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
         mock_indexer_inst = MagicMock()
         mock_indexer_inst.incremental_update.return_value = {
             "upserted": 3, "deleted": 1, "unchanged": 5,
             "errors": 4,
         }
-        bot.indexer = mock_indexer_inst
-        bot._run_update_index_cmd("msg123")
-        bot.transport.reply_text.assert_called()
-        reply = bot.transport.reply_text.call_args[0][1]
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=MagicMock())
+        router.dispatch_update_index("msg123", indexer=mock_indexer_inst)
+        transport.reply_text.assert_called()
+        reply = transport.reply_text.call_args[0][1]
         assert "向量索引更新完成" in reply
 
-    def test_run_update_index_not_initialized(self):
-        bot = _make_bot()
-        bot.indexer = None
-        bot._run_update_index_cmd("msg123")
-        bot.transport.reply_text.assert_called()
-        assert "未初始化" in bot.transport.reply_text.call_args[0][1]
+    def test_dispatch_update_index_not_initialized(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=MagicMock())
+        router.dispatch_update_index("msg123", indexer=None)
+        transport.reply_text.assert_called()
+        assert "未初始化" in transport.reply_text.call_args[0][1]
 
-    def test_run_search_cmd_no_results(self):
-        bot = _make_bot()
+    def test_dispatch_search_no_results(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
         mock_vi = MagicMock()
         mock_vi.search.return_value = []
-        bot._vector = mock_vi
-        bot._run_search_cmd("msg123", "query")
-        bot.transport.reply_text.assert_called()
-        assert "未找到" in bot.transport.reply_text.call_args[0][1]
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=MagicMock())
+        router.dispatch_search("msg123", "query", vector=mock_vi)
+        transport.reply_text.assert_called()
+        assert "未找到" in transport.reply_text.call_args[0][1]
 
-    def test_run_search_cmd_with_results(self):
-        bot = _make_bot()
+    def test_dispatch_search_with_results(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
         mock_vi = MagicMock()
         mock_vi.search.return_value = [
             SimpleNamespace(doc_id="doc1", distance=0.2, metadata={"title": "Test"}, text="x" * 150),
         ]
-        bot._vector = mock_vi
-        bot._run_search_cmd("msg123", "query")
-        bot.transport.reply_text.assert_called()
-        reply = bot.transport.reply_text.call_args[0][1]
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=MagicMock())
+        router.dispatch_search("msg123", "query", vector=mock_vi)
+        transport.reply_text.assert_called()
+        reply = transport.reply_text.call_args[0][1]
         assert "Test" in reply
 
-    def test_run_search_cmd_exception(self):
-        bot = _make_bot()
+    def test_dispatch_search_exception(self):
+        from lifebook.feishu_commands import CommandRouter
+        transport = MagicMock()
+        transport.reply_text = MagicMock(return_value="mid")
         mock_vi = MagicMock()
         mock_vi.search.side_effect = Exception("fail")
-        bot._vector = mock_vi
-        bot._run_search_cmd("msg123", "query")
-        bot.transport.reply_text.assert_called()
-        assert "搜索失败" in bot.transport.reply_text.call_args[0][1]
+        router = CommandRouter(transport=transport, writer=MagicMock(), executor=MagicMock())
+        router.dispatch_search("msg123", "query", vector=mock_vi)
+        transport.reply_text.assert_called()
+        assert "操作失败" in transport.reply_text.call_args[0][1]
 
 
 class TestLifecycle:
