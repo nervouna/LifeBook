@@ -9,8 +9,9 @@ from lifebook.notes import read_note
 
 
 class InboxService:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, llm_client=None):
         self.cfg = cfg
+        self._llm_client = llm_client
 
     def list_inbox(self, status: str | None = None) -> dict:
         sources_path = self.cfg.knowledge.sources_path

@@ -66,6 +66,9 @@ def create_app(cfg: Config) -> FastAPI:
     app.state.cfg = cfg
     app.state.vector_index = None
 
+    from ..llm import LLMClient
+    app.state.llm_client = LLMClient(cfg.llm)
+
     from .api import api_router
     app.include_router(api_router, prefix="/api")
 

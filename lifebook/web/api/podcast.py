@@ -34,10 +34,9 @@ async def generate_podcast(req: PodcastGenerateRequest, request: Request):
     if not note_path.is_file():
         raise HTTPException(status_code=404, detail="Note not found")
 
-    from lifebook.llm import LLMClient
     from lifebook.podcast import PodcastGenerator
 
-    gen = PodcastGenerator(cfg, llm=LLMClient(cfg.llm))
+    gen = PodcastGenerator(cfg, llm=request.app.state.llm_client)
 
     async def event_stream():
         yield {"event": "progress", "data": json.dumps({"step": "script", "message": "生成播客脚本..."})}
@@ -59,14 +58,13 @@ async def generate_podcast_multi(req: PodcastGenerateMultiRequest, request: Requ
     import datetime as dt
 
     from lifebook.podcast import select_notes, PodcastGenerator
-    from lifebook.llm import LLMClient
 
     since_date = dt.date.fromisoformat(req.since)
     notes, total = select_notes(cfg.knowledge.topics_path, since_date, req.limit)
     if not notes:
         raise HTTPException(status_code=404, detail="No notes found")
 
-    gen = PodcastGenerator(cfg, llm=LLMClient(cfg.llm))
+    gen = PodcastGenerator(cfg, llm=request.app.state.llm_client)
     has_more = total > req.limit
 
     async def event_stream():
