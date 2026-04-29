@@ -34,7 +34,6 @@ def mock_cfg(tmp_path):
     cfg.llm.api_key = "test-key"
     cfg.llm.base_url = "https://api.test"
     cfg.llm.model = "test-model"
-    cfg.llm.digest_model = "test-model"
     cfg.tavily.api_key = "test-tavily-key"
     cfg.tavily.extract_depth = "advanced"
     cfg.feishu.app_id = "test-app-id"
@@ -113,14 +112,6 @@ class TestProcessInboxResults:
         assert "1 ok" in result.output
         assert "1 skipped" in result.output
         assert "1 failed" in result.output
-
-
-class TestDigestCommand:
-    def test_digest_not_implemented(self, runner, mock_cfg):
-        with patch("lifebook.cli.load_config", return_value=mock_cfg):
-            result = runner.invoke(main, ["digest"], catch_exceptions=False)
-        assert result.exit_code == 1
-        assert "尚未实现" in result.output
 
 
 class TestServeCommand:

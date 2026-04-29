@@ -9,6 +9,17 @@ import pytest
 from lifebook.executor import Executor, ProcessResult
 
 
+def _write_source(sources_dir: Path, filename: str, content: str = "", **meta) -> Path:
+    path = sources_dir / filename
+    lines = ["---"]
+    for k, v in meta.items():
+        lines.append(f"{k}: {v}")
+    lines.append("---")
+    lines.append(content)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 @pytest.fixture
 def mock_config(tmp_path):
     sources = tmp_path / "10-sources"
@@ -33,17 +44,6 @@ def mock_config(tmp_path):
     cfg.fetch = MagicMock()
     cfg.vision = None
     return cfg
-
-
-def _write_source(sources_dir: Path, filename: str, content: str = "", **meta) -> Path:
-    path = sources_dir / filename
-    lines = ["---"]
-    for k, v in meta.items():
-        lines.append(f"{k}: {v}")
-    lines.append("---")
-    lines.append(content)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return path
 
 
 @pytest.fixture

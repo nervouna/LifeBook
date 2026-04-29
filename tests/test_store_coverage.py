@@ -11,16 +11,6 @@ from lifebook.notes import new_post, write_note
 from lifebook.store import NoteStore
 
 
-@pytest.fixture
-def store(tmp_path):
-    sources = tmp_path / "10-sources"
-    sources.mkdir()
-    topics = tmp_path / "20-topics"
-    topics.mkdir()
-    cfg = KnowledgeConfig(root=tmp_path)
-    return NoteStore(cfg)
-
-
 def _write_source(sources_dir: Path, filename: str, content: str = "", **meta) -> Path:
     path = sources_dir / filename
     lines = ["---"]
@@ -30,6 +20,16 @@ def _write_source(sources_dir: Path, filename: str, content: str = "", **meta) -
     lines.append(content)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+@pytest.fixture
+def store(tmp_path):
+    sources = tmp_path / "10-sources"
+    sources.mkdir()
+    topics = tmp_path / "20-topics"
+    topics.mkdir()
+    cfg = KnowledgeConfig(root=tmp_path)
+    return NoteStore(cfg)
 
 
 def _create_topic(topics_dir: Path, filename: str, **kwargs):
