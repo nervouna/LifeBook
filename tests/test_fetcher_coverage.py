@@ -470,7 +470,9 @@ class TestLLMCoverage:
             input_schema={}, user_prompt="prompt", system="system prompt",
         )
         call_kwargs = client.client.messages.create.call_args.kwargs
-        assert call_kwargs["system"] == "system prompt"
+        assert call_kwargs["system"] == [
+            {"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}},
+        ]
 
     def test_structured_call_empty_tool_use_input(self):
         from lifebook.llm import LLMClient
@@ -520,7 +522,9 @@ class TestLLMCoverage:
         result = client.text_call(user_prompt="hello", system="sys prompt")
         assert result == "response text"
         call_kwargs = client.client.messages.create.call_args.kwargs
-        assert call_kwargs["system"] == "sys prompt"
+        assert call_kwargs["system"] == [
+            {"type": "text", "text": "sys prompt", "cache_control": {"type": "ephemeral"}},
+        ]
 
     def test_agentic_call_xml_tool_with_executor(self):
         from lifebook.llm import LLMClient
