@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -349,7 +350,6 @@ class Writer:
         fb = feedback.replace(" ", "")
 
         # Try matching by index: "方案1", "选方案2", etc.
-        import re
         idx_match = re.search(r"方案(\d+)", fb)
         if idx_match:
             idx = int(idx_match.group(1)) - 1

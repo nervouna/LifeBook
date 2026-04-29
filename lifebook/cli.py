@@ -377,16 +377,14 @@ def _send_to_feishu(cfg, gen, audio_bytes: bytes, output: str, chat_id: str | No
     transport = FeishuTransport(feishu_cfg)
     click.echo("Converting to opus for Feishu...")
     opus_bytes = gen.convert_to_opus(audio_bytes)
-    opus_tmp = Path(output).with_suffix(".opus")
-    opus_tmp.write_bytes(opus_bytes)
-    opus_duration = gen.get_duration(opus_tmp)
+    opus_duration = gen._get_duration_from_bytes(opus_bytes)
     click.echo(f"Opus: {len(opus_bytes)} bytes ({opus_duration}s)")
 
+    opus_name = Path(output).with_suffix(".opus").name
     file_key = transport.upload_file(
-        opus_bytes, opus_tmp.name,
+        opus_bytes, opus_name,
         file_type="opus", duration=opus_duration,
     )
-    opus_tmp.unlink(missing_ok=True)
     if not file_key:
         click.echo("Error: file upload failed")
         sys.exit(1)

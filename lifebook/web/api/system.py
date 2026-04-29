@@ -25,10 +25,12 @@ def doctor(request: Request):
 @router.get("/stats", response_model=StatsResponse)
 def stats(request: Request):
     cfg = request.app.state.cfg
+    from lifebook.store import NoteStore
     note_svc = NoteService(cfg.knowledge)
     inbox_svc = InboxService(cfg)
+    store = NoteStore(cfg.knowledge)
     return {
-        "topic_count": len(list(cfg.knowledge.topics_path.rglob("*.md"))) if cfg.knowledge.topics_path.exists() else 0,
+        "topic_count": store.topic_count(),
         "inbox_count": inbox_svc.list_inbox(status="inbox")["total"],
         "categories": note_svc.get_categories(),
         "index_status": "ok" if cfg.knowledge.vector_store_path.exists() else "not_indexed",

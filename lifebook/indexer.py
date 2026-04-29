@@ -7,9 +7,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import frontmatter
-
 from .config import Config
+from .notes import read_note
 from .vector import VectorIndex
 
 logger = logging.getLogger(__name__)
@@ -168,7 +167,7 @@ class Indexer:
             (text_to_embed, metadata_dict). text may be empty if note
             has no useful content (e.g., status != active).
         """
-        post = frontmatter.load(md_path)
+        post = read_note(md_path)
 
         # Only index active notes
         status = post.get("status", "")

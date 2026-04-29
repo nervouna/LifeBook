@@ -193,15 +193,6 @@ class PodcastGenerator:
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    def get_duration(self, audio_path: Path) -> int:
-        """Get duration in seconds via ffprobe."""
-        result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "csv=p=0", str(audio_path)],
-            capture_output=True, text=True, check=True,
-        )
-        return max(1, int(float(result.stdout.strip())))
-
     def convert_to_opus(self, mp3_bytes: bytes) -> bytes:
         """Convert mp3 bytes to opus format via ffmpeg."""
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as src:
