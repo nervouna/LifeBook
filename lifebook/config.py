@@ -67,8 +67,7 @@ class LLMConfig:
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""
     model: str = "deepseek-chat"
-
-max_tokens: int = 4096
+    max_tokens: int = 4096
     temperature: float = 0.3
     timeout: int = 120
     extra_headers: dict[str, str] = field(default_factory=dict)
