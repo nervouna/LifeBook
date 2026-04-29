@@ -23,7 +23,7 @@ class TTSClient:
         self.cfg = cfg
 
     def synthesize(self, text: str) -> bytes:
-        """Convert text to audio bytes (mp3). Retries on 5xx with exponential backoff."""
+        """Convert text to audio bytes (mp3). Retries on 5xx/429 with exponential backoff."""
         if not text or not text.strip():
             raise ValueError("empty text")
 
@@ -48,7 +48,7 @@ class TTSClient:
             with httpx.Client(timeout=self.cfg.timeout) as http:
                 resp = http.post(url, headers=headers, json=payload)
 
-            if resp.status_code >= 500 and attempt < MAX_RETRIES:
+            if (resp.status_code >= 500 or resp.status_code == 429) and attempt < MAX_RETRIES:
                 wait = 2 ** attempt
                 logger.warning(
                     "TTS HTTP %d (attempt %d/%d), retrying in %ds",

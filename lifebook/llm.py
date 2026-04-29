@@ -6,7 +6,9 @@ for structured output, plain text generation, and multi-turn tool use.
 from __future__ import annotations
 
 import logging
+import random
 import re
+import time
 from typing import Any, TYPE_CHECKING
 
 import anthropic
@@ -18,6 +20,12 @@ if TYPE_CHECKING:
     from .image_processor import ImageData
 
 logger = logging.getLogger(__name__)
+
+_TRANSIENT_ERRORS = (
+    anthropic.APIConnectionError,
+    anthropic.RateLimitError,
+    anthropic.APITimeoutError,
+)
 
 # DeepSeek XML tool call format: <｜DSML｜invoke name="xxx"> ... </｜DSML｜invoke>
 _DSLM_INVOKE_RE = re.compile(
@@ -43,13 +51,16 @@ def _parse_tool_calls_from_content(content: str) -> list[dict[str, Any]]:
     return results
 
 
-def _to_anthropic_tool(tool: dict) -> dict:
+def _to_anthropic_tool(tool: dict, cache: bool = False) -> dict:
     """Convert provider-agnostic tool dict to Anthropic tool format."""
-    return {
+    result = {
         "name": tool["name"],
         "description": tool["description"],
         "input_schema": tool["input_schema"],
     }
+    if cache:
+        result["cache_control"] = {"type": "ephemeral"}
+    return result
 
 
 def _parse_response(response) -> tuple[list[dict[str, Any]], str]:
@@ -117,9 +128,17 @@ class LLMClient:
             "name": tool_name,
             "description": tool_description,
             "input_schema": input_schema,
-        })
+        }, cache=True)
         last_error: str | None = None
         for attempt in range(max_retries + 1):
+            if attempt > 0:
+                delay = min(2 ** (attempt - 1) + random.random(), 30)
+                logger.warning(
+                    "structured_call retry %d/%d, sleeping %.1fs",
+                    attempt, max_retries, delay,
+                )
+                time.sleep(delay)
+
             if images:
                 content: Any = [
                     {
@@ -145,9 +164,20 @@ class LLMClient:
                 "messages": [{"role": "user", "content": content}],
             }
             if system:
-                kwargs["system"] = system
+                kwargs["system"] = [
+                    {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+                ]
 
-            response = self.client.messages.create(**kwargs)
+            try:
+                response = self.client.messages.create(**kwargs)
+            except _TRANSIENT_ERRORS:
+                if attempt < max_retries:
+                    logger.warning(
+                        "structured_call transient error on attempt %d/%d",
+                        attempt + 1, max_retries + 1,
+                    )
+                    continue
+                raise
 
             tool_uses, text_content = _parse_response(response)
             for tu in tool_uses:
@@ -186,6 +216,7 @@ class LLMClient:
         model: str | None = None,
         max_tokens: int | None = None,
         messages: list[dict[str, str]] | None = None,
+        max_retries: int = 2,
     ) -> str:
         """Plain text generation."""
         if messages is not None:
@@ -195,18 +226,43 @@ class LLMClient:
         else:
             raise ValueError("Either user_prompt or messages must be provided")
 
-        kwargs: dict[str, Any] = {
-            "model": model or self.cfg.model,
-            "max_tokens": max_tokens or self.cfg.max_tokens,
-            "temperature": self.cfg.temperature,
-            "messages": msg_list,
-        }
-        if system:
-            kwargs["system"] = system
+        last_error: Exception | None = None
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                delay = min(2 ** (attempt - 1) + random.random(), 30)
+                logger.warning(
+                    "text_call retry %d/%d, sleeping %.1fs",
+                    attempt, max_retries, delay,
+                )
+                time.sleep(delay)
 
-        response = self.client.messages.create(**kwargs)
-        _, text_content = _parse_response(response)
-        return text_content.strip()
+            kwargs: dict[str, Any] = {
+                "model": model or self.cfg.model,
+                "max_tokens": max_tokens or self.cfg.max_tokens,
+                "temperature": self.cfg.temperature,
+                "messages": msg_list,
+            }
+            if system:
+                kwargs["system"] = [
+                    {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+                ]
+
+            try:
+                response = self.client.messages.create(**kwargs)
+            except _TRANSIENT_ERRORS as exc:
+                last_error = exc
+                if attempt < max_retries:
+                    logger.warning(
+                        "text_call transient error on attempt %d/%d",
+                        attempt + 1, max_retries + 1,
+                    )
+                    continue
+                raise
+
+            _, text_content = _parse_response(response)
+            return text_content.strip()
+
+        raise last_error  # type: ignore[misc]
 
     def agentic_call(
         self,
@@ -219,21 +275,25 @@ class LLMClient:
         max_rounds: int = 3,
     ) -> str:
         """Multi-turn tool-use loop. Returns final text response."""
-        anthropic_tools = [_to_anthropic_tool(t) for t in tools]
+        anthropic_tools = [_to_anthropic_tool(t, cache=(i == len(tools) - 1))
+                           for i, t in enumerate(tools)]
         tool_names = {t["name"] for t in tools}
         msgs: list[dict[str, Any]] = list(messages)
+        cached_system = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+        ]
 
         for _round in range(max_rounds):
             kwargs: dict[str, Any] = {
                 "model": model or self.cfg.model,
                 "max_tokens": max_tokens or self.cfg.max_tokens,
                 "temperature": self.cfg.temperature,
-                "system": system,
+                "system": cached_system,
                 "messages": msgs,
                 "tools": anthropic_tools,
             }
 
-            response = self.client.messages.create(**kwargs)
+            response = self._call_with_retry(kwargs)
 
             tool_uses, text_content = _parse_response(response)
 
@@ -292,14 +352,36 @@ class LLMClient:
             msgs.append({"role": "user", "content": tool_results})
 
         # max_rounds exceeded — force a text response without tools
-        response = self.client.messages.create(
-            model=model or self.cfg.model,
-            max_tokens=max_tokens or self.cfg.max_tokens,
-            temperature=self.cfg.temperature,
-            system=system,
-            messages=msgs + [{"role": "user", "content": "请用文字回复，不要再调用工具。"}],
-        )
+        fallback_kwargs: dict[str, Any] = {
+            "model": model or self.cfg.model,
+            "max_tokens": max_tokens or self.cfg.max_tokens,
+            "temperature": self.cfg.temperature,
+            "system": cached_system,
+            "messages": msgs + [{"role": "user", "content": "请用文字回复，不要再调用工具。"}],
+        }
+        response = self._call_with_retry(fallback_kwargs)
         _, final = _parse_response(response)
         final = final.strip()
         final = _DSLM_INVOKE_RE.sub("", final)
         return final.strip()
+
+    def _call_with_retry(self, kwargs: dict[str, Any], max_retries: int = 2) -> Any:
+        """Call messages.create with retry on transient errors."""
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                delay = min(2 ** (attempt - 1) + random.random(), 30)
+                logger.warning(
+                    "agentic_call retry %d/%d, sleeping %.1fs",
+                    attempt, max_retries, delay,
+                )
+                time.sleep(delay)
+            try:
+                return self.client.messages.create(**kwargs)
+            except _TRANSIENT_ERRORS:
+                if attempt < max_retries:
+                    logger.warning(
+                        "agentic_call transient error on attempt %d/%d",
+                        attempt + 1, max_retries + 1,
+                    )
+                    continue
+                raise
