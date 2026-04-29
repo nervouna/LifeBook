@@ -10,6 +10,8 @@ import pytest
 
 def _make_bot():
     from lifebook.feishu import FeishuBot
+    from lifebook.feishu_commands import CommandRouter
+    from lifebook.feishu_handler import MessageHandler
     bot = FeishuBot.__new__(FeishuBot)
     bot.cfg = MagicMock()
     bot.executor = MagicMock()
@@ -21,6 +23,18 @@ def _make_bot():
     bot.indexer = None
     bot._vector = None
     bot._thread_pool = MagicMock()
+    bot._in_flight = set()
+    bot._cmd_router = CommandRouter(
+        transport=bot.transport,
+        writer=bot.writer,
+        executor=bot.executor,
+        cfg=bot.cfg,
+    )
+    bot._msg_handler = MessageHandler(
+        transport=bot.transport,
+        cfg=bot.cfg,
+        thread_pool=bot._thread_pool,
+    )
     return bot
 
 
@@ -48,7 +62,7 @@ class TestImageMessageRouting:
         fake_bytes = b"\xff\xd8\xff" + b"\x00" * 100
         bot.transport.download_image_message.return_value = fake_bytes
 
-        with patch("lifebook.feishu.ingest_image") as mock_ingest:
+        with patch("lifebook.feishu_handler.ingest_image") as mock_ingest:
             mock_ingest.return_value = MagicMock()
             bot._handle_message(evt)
 
@@ -61,7 +75,7 @@ class TestImageMessageRouting:
         fake_bytes = b"\xff\xd8\xff" + b"\x00" * 100
         bot.transport.download_image_message.return_value = fake_bytes
 
-        with patch("lifebook.feishu.ingest_image") as mock_ingest:
+        with patch("lifebook.feishu_handler.ingest_image") as mock_ingest:
             mock_ingest.return_value = MagicMock()
             bot._handle_message(evt)
 
@@ -78,7 +92,7 @@ class TestImageMessageRouting:
         fake_bytes = b"\xff\xd8\xff" + b"\x00" * 100
         bot.transport.download_image_message.return_value = fake_bytes
 
-        with patch("lifebook.feishu.ingest_image") as mock_ingest:
+        with patch("lifebook.feishu_handler.ingest_image") as mock_ingest:
             mock_ingest.return_value = MagicMock()
             bot._handle_message(evt)
 
@@ -113,7 +127,7 @@ class TestImageMessageRouting:
         fake_bytes = b"\xff\xd8\xff" + b"\x00" * 100
         bot.transport.download_image_message.return_value = fake_bytes
 
-        with patch("lifebook.feishu.ingest_image", side_effect=Exception("disk full")):
+        with patch("lifebook.feishu_handler.ingest_image", side_effect=Exception("disk full")):
             bot._handle_message(evt)
 
         reply_text = bot.transport.reply_text.call_args[0][1]
@@ -126,7 +140,7 @@ class TestImageMessageRouting:
         fake_bytes = b"\xff\xd8\xff" + b"\x00" * 100
         bot.transport.download_image_message.return_value = fake_bytes
 
-        with patch("lifebook.feishu.ingest_image") as mock_ingest:
+        with patch("lifebook.feishu_handler.ingest_image") as mock_ingest:
             mock_ingest.return_value = MagicMock()
             bot._handle_message(evt)
 

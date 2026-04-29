@@ -364,7 +364,7 @@ def restore_cmd(ctx: click.Context) -> None:
     click.echo(result)
 
 
-def _send_to_feishu(cfg, gen, audio_bytes: bytes, output: str, chat_id: str | None) -> None:
+def _send_to_feishu(cfg, audio_proc, audio_bytes: bytes, output: str, chat_id: str | None) -> None:
     """Convert audio to opus and send to Feishu."""
     from .feishu_transport import FeishuTransport
 
@@ -376,8 +376,8 @@ def _send_to_feishu(cfg, gen, audio_bytes: bytes, output: str, chat_id: str | No
         sys.exit(1)
     transport = FeishuTransport(feishu_cfg)
     click.echo("Converting to opus for Feishu...")
-    opus_bytes = gen.convert_to_opus(audio_bytes)
-    opus_duration = gen._get_duration_from_bytes(opus_bytes)
+    opus_bytes = audio_proc.convert_to_opus(audio_bytes)
+    opus_duration = audio_proc.get_duration(opus_bytes)
     click.echo(f"Opus: {len(opus_bytes)} bytes ({opus_duration}s)")
 
     opus_name = Path(output).with_suffix(".opus").name
@@ -425,7 +425,7 @@ def podcast_cmd(ctx: click.Context, note_path: str, output: str | None,
     click.echo(f"Saved: {output}")
 
     if send_to_feishu:
-        _send_to_feishu(cfg, gen, audio_bytes, output, chat_id)
+        _send_to_feishu(cfg, gen.audio, audio_bytes, output, chat_id)
 
 
 @main.command("podcast-multi")
@@ -471,7 +471,7 @@ def podcast_multi_cmd(ctx: click.Context, since: str, limit: int, output: str | 
     click.echo(f"Saved: {output}")
 
     if send_to_feishu:
-        _send_to_feishu(cfg, gen, audio_bytes, output, chat_id)
+        _send_to_feishu(cfg, gen.audio, audio_bytes, output, chat_id)
 
 
 if __name__ == "__main__":

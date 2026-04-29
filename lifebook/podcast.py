@@ -1,14 +1,12 @@
-"""Podcast generator: topic note → script → audio."""
+"""Podcast generator: topic note -> script -> audio."""
 from __future__ import annotations
 
 import datetime
 import logging
-import shutil
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .audio import AudioProcessor
 from .config import Config
 from .llm import LLMClient
 from .notes import read_note
@@ -18,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _PODCAST_SKIP_SECTIONS = {"## 相关笔记", "## 来源"}
 _CHARS_PER_MINUTE = 180
+_TTS_FAILURE_THRESHOLD = 0.5
 
 
 def _extract_podcast_content(raw_content: str) -> str:
@@ -31,27 +30,36 @@ def _extract_podcast_content(raw_content: str) -> str:
     return "\n".join(result).strip()
 
 
-@dataclass
-class ScriptSegment:
-    speaker: str
-    text: str
+def truncate_at_boundary(text: str, max_chars: int = 5000) -> str:
+    """Truncate text at a paragraph boundary instead of hard character limit.
 
+    Falls back to hard truncation if no paragraph boundary is found within range.
+    """
+    if len(text) <= max_chars:
+        return text
 
-def _parse_segments(raw: str) -> list[ScriptSegment]:
-    """Parse LLM output into script segments."""
-    segments: list[ScriptSegment] = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        segments.append(ScriptSegment(speaker="host", text=line))
-    return segments
+    # Find the last paragraph break before max_chars
+    truncated = text[:max_chars]
+    last_newline = truncated.rfind("\n\n")
+    if last_newline > max_chars * 0.5:
+        return truncated[:last_newline].rstrip()
+
+    # Fallback: try single newline
+    last_single = truncated.rfind("\n")
+    if last_single > max_chars * 0.5:
+        return truncated[:last_single].rstrip()
+
+    # Hard fallback
+    return truncated.rstrip()
 
 
 def select_notes(
     topics_path: Path, since: datetime.date, limit: int = 10
 ) -> tuple[list[Path], int]:
-    """Select recent notes by modification date.
+    """Select recent notes by frontmatter date, falling back to mtime.
+
+    Uses ``processed_at`` or ``created`` from YAML frontmatter when available,
+    falling back to filesystem modification time.
 
     Returns (selected_paths, total_matching_count).
     """
@@ -59,14 +67,39 @@ def select_notes(
     for p in topics_path.rglob("*.md"):
         if p.name.startswith("."):
             continue
-        st = p.stat()
-        if datetime.date.fromtimestamp(st.st_mtime) >= since:
-            candidates.append((st.st_mtime, p))
+        date_val = _frontmatter_date(p)
+        if date_val is not None:
+            ts = date_val.timestamp()
+        else:
+            ts = p.stat().st_mtime
+        if datetime.date.fromtimestamp(ts) >= since:
+            candidates.append((ts, p))
 
     candidates.sort(key=lambda x: x[0], reverse=True)
     total = len(candidates)
     selected = [p for _, p in candidates[:limit]]
     return selected, total
+
+
+def _frontmatter_date(p: Path) -> datetime.datetime | None:
+    """Extract processed_at or created from frontmatter, return as datetime."""
+    try:
+        post = read_note(p)
+    except (FileNotFoundError, UnicodeDecodeError, ValueError):
+        return None
+
+    for key in ("processed_at", "created"):
+        val = post.get(key)
+        if val is None:
+            continue
+        if isinstance(val, datetime.datetime):
+            return val
+        try:
+            return datetime.datetime.fromisoformat(str(val))
+        except ValueError:
+            continue
+    return None
+
 
 _SCRIPT_BASE = (
     "你是一位叫 Mia 的播客节目主持人，你的听众叫大毛。\n"
@@ -106,10 +139,17 @@ _SCRIPT_SYSTEM_MULTI = (
 class PodcastGenerator:
     _PODCAST_MAX_TOKENS = 16384
 
-    def __init__(self, cfg: Config, llm: LLMClient, tts: TTSClient | None = None):
+    def __init__(
+        self,
+        cfg: Config,
+        llm: LLMClient,
+        tts: TTSClient | None = None,
+        audio: AudioProcessor | None = None,
+    ):
         self.cfg = cfg
         self.llm = llm
         self.tts = tts or TTSClient(cfg.tts)
+        self.audio = audio or AudioProcessor()
 
     def generate_script(self, title: str, content: str) -> list[ScriptSegment]:
         """Generate podcast monologue script from note content."""
@@ -126,7 +166,9 @@ class PodcastGenerator:
             try:
                 post = read_note(p)
                 title = post.get("title", p.stem)
-                content = _extract_podcast_content(post.content)[:5000]
+                content = truncate_at_boundary(
+                    _extract_podcast_content(post.content), max_chars=5000
+                )
                 parts.append(f"## {title}\n{content}")
             except (FileNotFoundError, UnicodeDecodeError, ValueError) as e:
                 logger.warning("Skipping note %s: %s", p.name, e)
@@ -155,72 +197,35 @@ class PodcastGenerator:
         return _parse_segments(raw)
 
     def synthesize_script(self, segments: list[ScriptSegment]) -> bytes:
-        """Synthesize each segment independently, skip content-filtered ones, concat."""
+        """Synthesize each segment independently, skip content-filtered ones, concat.
+
+        Raises TTSError if more than 50% of segments fail synthesis.
+        """
         parts: list[bytes] = []
+        failures = 0
         for i, seg in enumerate(segments):
             try:
                 audio = self.tts.synthesize(seg.text)
                 parts.append(audio)
             except TTSError as e:
                 logger.warning("Segment %d skipped: %s", i, e)
+                failures += 1
                 continue
+
+        total = len(segments)
+        if total > 0 and failures / total > _TTS_FAILURE_THRESHOLD:
+            raise TTSError(
+                f"TTS failure rate {failures}/{total} exceeds {_TTS_FAILURE_THRESHOLD:.0%} threshold"
+            )
+
         if not parts:
             raise TTSError("All segments failed TTS synthesis")
         if len(parts) == 1:
             return parts[0]
-        return self._concat_audio(parts)
-
-    def _concat_audio(self, parts: list[bytes]) -> bytes:
-        """Concat mp3 byte segments via ffmpeg concat demuxer."""
-        tmp_dir = tempfile.mkdtemp()
-        try:
-            paths: list[Path] = []
-            for i, audio in enumerate(parts):
-                p = Path(tmp_dir) / f"seg_{i}.mp3"
-                p.write_bytes(audio)
-                paths.append(p)
-            list_file = Path(tmp_dir) / "list.txt"
-            list_file.write_text(
-                "\n".join(f"file '{p}'" for p in paths), encoding="utf-8"
-            )
-            output = Path(tmp_dir) / "out.mp3"
-            subprocess.run(
-                ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                 "-i", str(list_file), "-c", "copy", str(output)],
-                capture_output=True, check=True,
-            )
-            return output.read_bytes()
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    def convert_to_opus(self, mp3_bytes: bytes) -> bytes:
-        """Convert mp3 bytes to opus format via ffmpeg."""
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as src:
-            src.write(mp3_bytes)
-            src_path = Path(src.name)
-        dst_path = src_path.with_suffix(".opus")
-        try:
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", str(src_path), "-acodec", "libopus",
-                 "-ac", "1", "-ar", "16000", str(dst_path)],
-                capture_output=True, check=True,
-            )
-            return dst_path.read_bytes()
-        finally:
-            src_path.unlink(missing_ok=True)
-            dst_path.unlink(missing_ok=True)
-
-    def _get_duration_from_bytes(self, audio_bytes: bytes) -> int:
-        """Get duration in seconds from audio bytes via ffprobe (piped)."""
-        result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "csv=p=0", "-i", "pipe:0"],
-            input=audio_bytes, capture_output=True, check=True,
-        )
-        return max(1, int(float(result.stdout.strip())))
+        return self.audio.concat_audio(parts)
 
     def generate(self, note_path: Path) -> tuple[bytes, int]:
-        """Full pipeline: note → script → TTS.
+        """Full pipeline: note -> script -> TTS.
 
         Returns (audio_bytes, duration_seconds).
         """
@@ -236,13 +241,13 @@ class PodcastGenerator:
             raise ValueError("LLM produced no valid script segments")
 
         audio_bytes = self.synthesize_script(segments)
-        duration = self._get_duration_from_bytes(audio_bytes)
+        duration = self.audio.get_duration(audio_bytes)
         return audio_bytes, duration
 
     def generate_multi(
         self, note_paths: list[Path], has_more: bool
     ) -> tuple[bytes, int]:
-        """Full pipeline: multiple notes → script → TTS."""
+        """Full pipeline: multiple notes -> script -> TTS."""
         if not note_paths:
             raise ValueError("No notes provided")
 
@@ -251,5 +256,22 @@ class PodcastGenerator:
             raise ValueError("LLM produced no valid script segments")
 
         audio_bytes = self.synthesize_script(segments)
-        duration = self._get_duration_from_bytes(audio_bytes)
+        duration = self.audio.get_duration(audio_bytes)
         return audio_bytes, duration
+
+
+@dataclass
+class ScriptSegment:
+    speaker: str
+    text: str
+
+
+def _parse_segments(raw: str) -> list[ScriptSegment]:
+    """Parse LLM output into script segments."""
+    segments: list[ScriptSegment] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        segments.append(ScriptSegment(speaker="host", text=line))
+    return segments

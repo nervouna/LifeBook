@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Callable
 
 import httpx
@@ -19,6 +20,9 @@ from lark_oapi.api.im.v1 import (
 from .config import FeishuConfig
 
 logger = logging.getLogger(__name__)
+
+_MAX_BACKOFF = 60
+_INITIAL_BACKOFF = 1
 
 
 class FeishuTransport:
@@ -194,6 +198,43 @@ class FeishuTransport:
         )
         logger.info("Feishu bot starting (long-connection WebSocket)...")
         self._ws_client.start()
+
+    def start_with_reconnect(
+        self, message_handler: Callable[[P2ImMessageReceiveV1], None],
+    ) -> None:
+        """Start WebSocket with automatic reconnection and exponential backoff.
+
+        Retries on connection failures with backoff: 1s, 2s, 4s, 8s, ..., capped at 60s.
+        Backoff resets after a successful connection.
+        """
+        backoff = _INITIAL_BACKOFF
+        while True:
+            try:
+                handler = (
+                    lark.EventDispatcherHandler.builder("", "")
+                    .register_p2_im_message_receive_v1(message_handler)
+                    .build()
+                )
+                self._ws_client = lark.ws.Client(
+                    app_id=self.cfg.app_id,
+                    app_secret=self.cfg.app_secret,
+                    event_handler=handler,
+                    log_level=lark.LogLevel.WARNING,
+                )
+                logger.info("Feishu bot starting (long-connection WebSocket)...")
+                self._ws_client.start()
+                # start() returned normally (connection closed)
+                logger.warning("Feishu WebSocket disconnected, reconnecting...")
+                backoff = _INITIAL_BACKOFF
+            except Exception:
+                logger.exception(
+                    "Feishu WebSocket error, reconnecting in %ds...", backoff
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
+            except KeyboardInterrupt:
+                logger.info("Feishu bot stopped by user")
+                break
 
     def stop(self) -> None:
         """Stop WebSocket connection."""
