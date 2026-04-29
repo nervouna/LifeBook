@@ -26,17 +26,17 @@ class TestSystemStats:
 
 class TestCategories:
     def test_empty(self, client):
-        resp = client.get("/api/categories")
+        resp = client.get("/api/system/categories")
         assert resp.status_code == 200
 
     def test_has_categories(self, client, mock_config):
         (mock_config.knowledge.topics_path / "AI技术").mkdir()
-        resp = client.get("/api/categories")
+        resp = client.get("/api/system/categories")
         data = resp.json()
         assert "AI技术" in data["categories"]
 
 
 class TestTags:
     def test_empty(self, client):
-        resp = client.get("/api/tags")
+        resp = client.get("/api/system/tags")
         assert resp.status_code == 200

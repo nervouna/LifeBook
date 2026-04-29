@@ -26,6 +26,7 @@ def list_notes(
 
 @router.get("/{path:path}", response_model=NoteDetail)
 def get_note(path: str, request: Request):
+    _check_path(path, request)
     note = _svc(request).get_note(path)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -34,6 +35,7 @@ def get_note(path: str, request: Request):
 
 @router.put("/{path:path}", response_model=NoteDetail)
 def update_note(path: str, update: NoteUpdate, request: Request):
+    _check_path(path, request)
     svc = _svc(request)
     note = svc.update_note(path, update.model_dump(exclude_none=True))
     if not note:
@@ -43,10 +45,22 @@ def update_note(path: str, update: NoteUpdate, request: Request):
 
 @router.delete("/{path:path}")
 def delete_note(path: str, request: Request):
-    from pathlib import Path
+    _check_path(path, request)
     cfg = request.app.state.cfg.knowledge
     full = cfg.root / path
     if not full.is_file():
         raise HTTPException(status_code=404, detail="Note not found")
     full.unlink()
     return {"ok": True}
+
+
+def _check_path(path: str, request: Request) -> None:
+    """Reject path traversal attempts."""
+    from pathlib import PurePosixPath
+    parts = PurePosixPath(path).parts
+    if any(p == ".." for p in parts):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    cfg = request.app.state.cfg.knowledge
+    resolved = (cfg.root / path).resolve()
+    if not resolved.is_relative_to(cfg.root.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid path")

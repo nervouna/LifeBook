@@ -153,6 +153,10 @@ class WebConfig:
     host: str = "127.0.0.1"
     port: int = 8080
     debug: bool = False
+    cors_origins: list[str] = field(
+        default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:8080"]
+    )
+    api_key: str = ""
 
 
 @dataclass
