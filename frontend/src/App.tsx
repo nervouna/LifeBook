@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import DashboardPage from "@/pages/Dashboard";
 import NotesPage from "@/pages/Notes";
 import InboxPage from "@/pages/Inbox";
@@ -8,7 +9,19 @@ import SearchPage from "@/pages/Search";
 import WriterPage from "@/pages/Writer";
 import PodcastPage from "@/pages/Podcast";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        const status = (error as { status?: number })?.status;
+        if (status && status >= 400 && status < 500) return false;
+        return failureCount < 2;
+      },
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 const navItems = [
   { to: "/", label: "概览", icon: "📊" },
@@ -46,12 +59,12 @@ function Layout() {
       </aside>
       <main className="flex-1 overflow-auto">
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/notes/*" element={<NotesPage />} />
-          <Route path="/inbox" element={<InboxPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/writer" element={<WriterPage />} />
-          <Route path="/podcast" element={<PodcastPage />} />
+          <Route path="/" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
+          <Route path="/notes/*" element={<ErrorBoundary><NotesPage /></ErrorBoundary>} />
+          <Route path="/inbox" element={<ErrorBoundary><InboxPage /></ErrorBoundary>} />
+          <Route path="/search" element={<ErrorBoundary><SearchPage /></ErrorBoundary>} />
+          <Route path="/writer" element={<ErrorBoundary><WriterPage /></ErrorBoundary>} />
+          <Route path="/podcast" element={<ErrorBoundary><PodcastPage /></ErrorBoundary>} />
         </Routes>
       </main>
     </div>
