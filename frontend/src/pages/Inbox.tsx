@@ -4,8 +4,32 @@ import { api } from "@/lib/api";
 import type { InboxListResponse } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Badge, type badgeVariants } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { VariantProps } from "class-variance-authority";
+
+type BadgeVariant = VariantProps<typeof badgeVariants>["variant"];
+
+const statusColor: Record<string, BadgeVariant> = {
+  inbox: "default",
+  processing: "secondary",
+  processed: "outline",
+  skipped: "destructive",
+};
+
+function SkeletonRow() {
+  return (
+    <Card>
+      <CardContent className="p-4 flex items-center justify-between">
+        <div className="space-y-2">
+          <div className="h-4 w-48 bg-muted rounded animate-pulse" />
+          <div className="h-3 w-32 bg-muted rounded animate-pulse" />
+        </div>
+        <div className="h-5 w-16 bg-muted rounded-full animate-pulse" />
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function InboxPage() {
   const queryClient = useQueryClient();
@@ -15,7 +39,6 @@ export default function InboxPage() {
     mutationFn: (url: string) => api.ingest({ url_or_text: url }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["inbox"] }); setIngestUrl(""); },
   });
-  const statusColor: Record<string, string> = { inbox: "default", processing: "secondary", processed: "outline", skipped: "destructive" };
 
   return (
     <div className="p-6 space-y-6">
@@ -35,7 +58,13 @@ export default function InboxPage() {
         </CardContent>
       </Card>
       <div className="space-y-2">
-        {inbox.data?.items?.length === 0 ? (
+        {inbox.isLoading ? (
+          <>
+            <SkeletonRow />
+            <SkeletonRow />
+            <SkeletonRow />
+          </>
+        ) : inbox.data?.items?.length === 0 ? (
           <p className="text-muted-foreground">收件箱为空</p>
         ) : (
           inbox.data?.items?.map((item) => (
@@ -45,7 +74,7 @@ export default function InboxPage() {
                   <div className="font-medium">{item.title}</div>
                   <div className="text-sm text-muted-foreground mt-1">{item.source_type} · {item.created?.slice(0, 10)}</div>
                 </div>
-                <Badge variant={statusColor[item.status] as any}>{item.status}</Badge>
+                <Badge variant={statusColor[item.status] ?? "default"}>{item.status}</Badge>
               </CardContent>
             </Card>
           ))
