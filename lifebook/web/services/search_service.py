@@ -1,19 +1,17 @@
 """Search service: semantic search orchestration."""
 from __future__ import annotations
 
-from lifebook.config import KnowledgeConfig
 from lifebook.vector import VectorIndex
 
 
 class SearchService:
-    def __init__(self, cfg: KnowledgeConfig):
-        self.cfg = cfg
+    def __init__(self, vector_index: VectorIndex):
+        self._vi = vector_index
 
     def search(self, query: str, limit: int = 10) -> list[dict]:
         if not query.strip():
             return []
-        vi = VectorIndex(self.cfg.vector_store_path)
-        results = vi.search(query, n_results=limit)
+        results = self._vi.search(query, n_results=limit)
         items = []
         for r in results:
             items.append({

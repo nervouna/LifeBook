@@ -1,7 +1,7 @@
 """Tests for search API endpoint."""
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,8 +13,7 @@ class TestSearch:
         data = resp.json()
         assert data["results"] == []
 
-    @patch("lifebook.web.services.search_service.VectorIndex")
-    def test_returns_results(self, mock_vi_cls, client):
+    def test_returns_results(self, client):
         mock_vi = MagicMock()
         mock_result = MagicMock()
         mock_result.doc_id = "20-topics/AI技术/Test.md"
@@ -22,7 +21,9 @@ class TestSearch:
         mock_result.metadata = {"title": "Test Note"}
         mock_result.text = "Some preview text"
         mock_vi.search.return_value = [mock_result]
-        mock_vi_cls.return_value = mock_vi
+
+        # Inject mock VectorIndex into app state before request
+        client.app.state.vector_index = mock_vi
 
         resp = client.post("/api/search", json={"query": "test", "limit": 10})
         assert resp.status_code == 200

@@ -18,6 +18,7 @@ def create_app(cfg: Config) -> FastAPI:
         allow_headers=["*"],
     )
     app.state.cfg = cfg
+    app.state.vector_index = None
 
     from .api import api_router
     app.include_router(api_router, prefix="/api")
