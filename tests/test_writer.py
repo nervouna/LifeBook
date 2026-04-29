@@ -1066,3 +1066,280 @@ class TestBackfillExecution:
 
         result = w._evaluate_backfill("主题", "内容")
         assert result == ""
+
+
+# ── 10. Concept feedback persistence ─────────────────────────────────
+
+
+class TestConceptFeedbackPersistence:
+    """W3: concept feedback must survive restarts."""
+
+    def test_feedback_saved_to_draft_json(self, tmp_path):
+        """When user provides feedback in concept stage, it should be saved to meta."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+
+        # Provide feedback that modifies the concept
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("把主题改成更具体的版本")
+
+        import json
+        with w.draft_meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        assert meta["concept"]["user_feedback"] == "把主题改成更具体的版本"
+
+    def test_feedback_persists_across_restart(self, tmp_path):
+        """Concept feedback should survive a simulated restart (reload from disk)."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("修改后的反馈内容")
+
+        # Simulate restart: create new Writer, reload from disk
+        w2 = Writer(cfg, llm)
+        meta, _ = w2._load_draft()
+        assert meta["concept"]["user_feedback"] == "修改后的反馈内容"
+
+    def test_no_feedback_key_when_confirmed_directly(self, tmp_path):
+        """Simple confirmation should still set user_feedback."""
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+
+        import json
+        with w.draft_meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        assert meta["concept"]["user_feedback"] == "确认"
+
+
+# ── 11. Framework selection ───────────────────────────────────────────
+
+
+class TestFrameworkSelectionImproved:
+    """W5: framework selection with better matching and error messages."""
+
+    def _setup_framework_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        return w, llm, cfg
+
+    def test_unrecognized_input_returns_options(self, tmp_path):
+        """Unrecognized input should return error listing available options."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        result = w.handle_message("完全不相关的输入xyz")
+        # Should return an error with options listed, not silently pick first
+        assert "方案" in result
+        assert "方案A" in result
+        assert "方案B" in result
+
+    def test_select_by_plain_number(self, tmp_path):
+        """'2' should select the second framework."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        llm.text_call.side_effect = ["唯一段落。", "- 自检项"]
+
+        w.handle_message("2")
+
+        # 方案B has 1 section, so text_call should be called 2 times (1 section + 1 checklist)
+        assert llm.text_call.call_count == 2
+
+    def test_select_by_chinese_ordinal(self, tmp_path):
+        """'第二个' should select the second framework."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        llm.text_call.side_effect = ["唯一段落。", "- 自检项"]
+
+        w.handle_message("第二个")
+
+        assert llm.text_call.call_count == 2
+
+    def test_select_by_option_label(self, tmp_path):
+        """'option B' should select the second framework by name match."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        llm.text_call.side_effect = ["唯一段落。", "- 自检项"]
+
+        w.handle_message("option B")
+
+        assert llm.text_call.call_count == 2
+
+    def test_select_by_english_option(self, tmp_path):
+        """'option A' should select the first framework by name match."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+
+        w.handle_message("option A")
+
+        # 方案A has 2 sections
+        assert llm.text_call.call_count == 3  # 2 sections + 1 checklist
+
+
+# ── 12. Publish archive ───────────────────────────────────────────────
+
+
+class TestPublishArchive:
+    """W4: publish should archive draft files instead of deleting."""
+
+    def _setup_content_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+        w.handle_message("选方案1")
+        return w, llm, cfg
+
+    def test_publish_creates_archive(self, tmp_path):
+        """Publish should move draft files to .archive/ directory."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+        meta, content = w._load_draft()
+        meta["checklist"] = ""
+        w._save_draft(meta, content)
+
+        llm.structured_call.return_value = {"should_backfill": False, "items": []}
+        result = w.publish()
+        assert "已发布" in result
+
+        # Draft files should be gone from original location
+        assert not w.draft_meta_path.exists()
+        assert not w.draft_path.exists()
+
+        # Archive directory should exist with the files
+        archive_dir = cfg.knowledge.publish_path / ".archive"
+        assert archive_dir.exists()
+        # Files are in timestamped subdirectories
+        archived_json = list(archive_dir.rglob("draft.json"))
+        assert len(archived_json) >= 1
+
+    def test_restore_published_restores_files(self, tmp_path):
+        """restore_published should move archived files back."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+        meta, content = w._load_draft()
+        meta["checklist"] = ""
+        w._save_draft(meta, content)
+
+        llm.structured_call.return_value = {"should_backfill": False, "items": []}
+        w.publish()
+
+        # Now restore
+        result = w.restore_published()
+        assert "已恢复" in result
+        assert w.active
+
+    def test_restore_published_no_archive(self, tmp_path):
+        """restore_published with no archive should return error."""
+        w, llm, cfg = make_writer(tmp_path)
+        result = w.restore_published()
+        assert "没有可恢复" in result
+
+
+# ── 13. Discussion context optimization ───────────────────────────────
+
+
+class TestDiscussContextOptimization:
+    """C2: _discuss should use cached system prompt for static context."""
+
+    def _setup_content_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+        w.handle_message("选方案1")
+        return w, llm, cfg
+
+    def test_discuss_system_prompt_contains_article_context(self, tmp_path):
+        """Static context (article, concept, checklist) should be in system prompt."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+        llm.agentic_call.return_value = "好的，已修改。"
+
+        w.handle_message("修改引言")
+
+        call_args = llm.agentic_call.call_args
+        system = call_args.kwargs["system"]
+
+        # System should be a list with cache_control
+        assert isinstance(system, list)
+        text_block = system[0]
+        assert text_block["type"] == "text"
+        assert text_block["cache_control"] == {"type": "ephemeral"}
+        # Should contain the static context
+        assert "核心概念" in text_block["text"]
+        assert "当前正文" in text_block["text"]
+
+    def test_discuss_messages_only_contain_feedback(self, tmp_path):
+        """Messages should only contain user feedback and assistant responses."""
+        w, llm, cfg = self._setup_content_stage(tmp_path)
+        llm.agentic_call.return_value = "好的，已修改。"
+
+        w.handle_message("修改引言")
+
+        call_args = llm.agentic_call.call_args
+        messages = call_args.kwargs["messages"]
+
+        # First message should not contain the full article (it's in system now)
+        for msg in messages:
+            if msg["role"] == "user" and "修改引言" not in msg.get("content", ""):
+                # This should not contain the full article content
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    assert "当前正文" not in content
+                    assert "当前自检清单" not in content
+
+
+# ── 14. Section generation context optimization ──────────────────────
+
+
+class TestSectionContextOptimization:
+    """C3: _advance_to_content should use cached system prompt."""
+
+    def _setup_framework_stage(self, tmp_path):
+        w, llm, cfg = make_writer(tmp_path)
+        llm.structured_call.return_value = CONCEPT_RESULT
+        w.start("idea")
+        llm.structured_call.return_value = FRAMEWORK_RESULT
+        w.handle_message("确认")
+        return w, llm, cfg
+
+    def test_section_system_prompt_contains_concept_and_framework(self, tmp_path):
+        """Concept and framework should be in cached system prompt for section generation."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+
+        w.handle_message("选方案1")
+
+        # Check the first text_call (section generation)
+        first_call = llm.text_call.call_args_list[0]
+        system = first_call.kwargs.get("system")
+
+        # System should be a list with cache_control
+        assert isinstance(system, list)
+        text_block = system[0]
+        assert text_block["type"] == "text"
+        assert text_block["cache_control"] == {"type": "ephemeral"}
+        assert "核心概念" in text_block["text"]
+
+    def test_section_user_prompt_only_has_current_section(self, tmp_path):
+        """User prompt should only contain the current section context."""
+        w, llm, cfg = self._setup_framework_stage(tmp_path)
+        llm.text_call.side_effect = list(CONTENT_SECTIONS)
+
+        w.handle_message("选方案1")
+
+        # Check each section generation call
+        for call in llm.text_call.call_args_list[:-1]:  # Exclude checklist call
+            user_prompt = call.kwargs.get("user_prompt", "")
+            # Should NOT contain the full concept text (it's in system)
+            assert "核心概念" not in user_prompt
+            # Should contain section-specific info
+            assert "章节" in user_prompt
