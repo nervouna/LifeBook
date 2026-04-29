@@ -32,6 +32,7 @@ def mock_vector_index():
     """Create a mock VectorIndex."""
     idx = MagicMock()
     idx.upsert = MagicMock()
+    idx.upsert_batch = MagicMock()
     idx.delete = MagicMock()
     idx.count.return_value = 0
     return idx
@@ -87,13 +88,14 @@ def test_incremental_update_new_file(indexer, mock_config, mock_vector_index):
     stats = indexer.incremental_update()
     assert stats["upserted"] == 1
     assert stats["unchanged"] == 0
-    mock_vector_index.upsert.assert_called_once()
+    mock_vector_index.upsert_batch.assert_called_once()
 
-    # Check that the call had correct doc_id
-    call_kwargs = mock_vector_index.upsert.call_args.kwargs
-    assert "20-topics/AI技术/test.md" in call_kwargs["doc_id"]
-    assert "Test Note" in call_kwargs["text"]
-    assert call_kwargs["metadata"]["category"] == "AI技术"
+    # Check that the batch call had correct doc_id
+    docs = mock_vector_index.upsert_batch.call_args[0][0]
+    assert len(docs) == 1
+    assert "20-topics/AI技术/test.md" in docs[0]["id"]
+    assert "Test Note" in docs[0]["text"]
+    assert docs[0]["metadata"]["category"] == "AI技术"
 
 
 def test_incremental_update_unchanged(indexer, mock_config, mock_vector_index):
@@ -105,11 +107,11 @@ def test_incremental_update_unchanged(indexer, mock_config, mock_vector_index):
     assert stats1["upserted"] == 1
 
     # Second run: unchanged (same mtime)
-    mock_vector_index.upsert.reset_mock()
+    mock_vector_index.upsert_batch.reset_mock()
     stats2 = indexer.incremental_update()
     assert stats2["unchanged"] == 1
     assert stats2["upserted"] == 0
-    mock_vector_index.upsert.assert_not_called()
+    mock_vector_index.upsert_batch.assert_not_called()
 
 
 def test_incremental_update_modified(indexer, mock_config, mock_vector_index):
@@ -120,7 +122,7 @@ def test_incremental_update_modified(indexer, mock_config, mock_vector_index):
 
     # First run
     indexer.incremental_update()
-    mock_vector_index.upsert.reset_mock()
+    mock_vector_index.upsert_batch.reset_mock()
 
     # Modify file (touch with a new mtime)
     time.sleep(0.05)
@@ -131,7 +133,7 @@ def test_incremental_update_modified(indexer, mock_config, mock_vector_index):
 
     stats = indexer.incremental_update()
     assert stats["upserted"] == 1
-    mock_vector_index.upsert.assert_called_once()
+    mock_vector_index.upsert_batch.assert_called_once()
 
 
 def test_incremental_update_deleted_file(indexer, mock_config, mock_vector_index):
@@ -177,12 +179,13 @@ def test_full_rebuild(indexer, mock_config, mock_vector_index):
 
     # First run
     indexer.incremental_update()
-    mock_vector_index.upsert.reset_mock()
+    mock_vector_index.upsert_batch.reset_mock()
 
-    # Full rebuild should re-index even though mtime hasn't changed
+    # Full rebuild should re-index (mtime cleared) but content-hash may skip if same
     stats = indexer.full_rebuild()
-    assert stats["upserted"] == 1
-    mock_vector_index.upsert.assert_called_once()
+    # Content hasn't changed, so content-hash should skip re-embedding
+    assert stats["upserted"] == 0
+    mock_vector_index.upsert_batch.assert_not_called()
 
 
 def test_meta_persistence(indexer, mock_config):
@@ -196,6 +199,9 @@ def test_meta_persistence(indexer, mock_config):
     meta = json.loads(indexer.meta_path.read_text(encoding="utf-8"))
     assert "indexed" in meta
     assert len(meta["indexed"]) == 1
+    entry = next(iter(meta["indexed"].values()))
+    assert "mtime" in entry
+    assert "content_hash" in entry
 
 
 def test_start_stop(indexer):
