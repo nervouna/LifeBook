@@ -223,8 +223,8 @@ class Writer:
         backfill_msg = self._evaluate_backfill(title, content)
         logger.info("backfill result: %s", backfill_msg[:100] if backfill_msg else "none")
 
-        # Clean up
-        self._delete_draft()
+        # Clean up: archive draft files for potential undo
+        self._archive_draft()
         self._history.clear()
 
         rel = pub_path.relative_to(self.cfg.knowledge.root)
@@ -258,6 +258,9 @@ class Writer:
 
         frameworks = result["frameworks"]
         logger.info("frameworks generated: %d", len(frameworks))
+
+        # Persist user feedback so it survives restarts
+        concept["user_feedback"] = feedback
 
         # Update metadata
         meta["stage"] = STAGE_FRAMEWORK
@@ -293,23 +296,45 @@ class Writer:
         # Select framework by index or name
         outline = self._select_framework(frameworks, feedback)
         if not outline:
-            return "未找到匹配的框架方案，请重新选择。"
+            options = "\n".join(
+                f"  {i}. {fw.get('name', f'方案{i}')}"
+                for i, fw in enumerate(frameworks, 1)
+            )
+            return (
+                "未找到匹配的框架方案。可选项：\n"
+                f"{options}\n\n"
+                "请输入方案编号（如「1」或「第二个」）、方案名称、或「option A」。"
+            )
+
+        # Build cached system prompt with concept + framework + topic context
+        system_context = (
+            f"核心概念：\n{concept_text}\n\n"
+            f"选定框架：\n"
+        )
+        for item in outline:
+            system_context += f"  - {item['heading']}：{item['point']}\n"
+        if topic_context:
+            system_context += f"\n存量笔记参考：\n{topic_context}\n"
+        section_system = [
+            {
+                "type": "text",
+                "text": f"{SECTION_SYSTEM}\n\n{system_context}",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
         # Generate each section sequentially
         generated_sections: list[str] = []
         for item in outline:
             previous = "\n\n".join(generated_sections) if generated_sections else "（还没有已写好的章节）"
             prompt = (
-                f"核心概念：\n{concept_text}\n\n"
                 f"当前章节：{item['heading']}\n\n"
                 f"章节要点：{item['point']}\n\n"
                 f"之前已写好的章节：\n{previous}"
             )
-            if topic_context:
-                prompt += f"\n\n存量笔记参考：\n{topic_context}"
             section_content = self.llm.text_call(
                 user_prompt=prompt,
-                system=SECTION_SYSTEM,
+                system=section_system,
             )
             generated_sections.append(section_content.strip())
 
@@ -342,28 +367,49 @@ class Writer:
     def _select_framework(self, frameworks: list[dict], feedback: str) -> list[dict] | None:
         """Select framework by index or name match from structured frameworks.
 
-        Returns the outline list of the selected framework, or None if no match.
+        Returns the outline list of the selected framework, or None if no match
+        (caller should show options listing).
         """
         if not frameworks:
             return None
 
-        fb = feedback.replace(" ", "")
+        fb = feedback.replace(" ", "").lower()
 
-        # Try matching by index: "方案1", "选方案2", etc.
-        idx_match = re.search(r"方案(\d+)", fb)
+        # Try matching by index: "方案1", "选方案2", "1", "2", etc.
+        idx_match = re.search(r"(?:方案|option)?(\d+)", fb)
         if idx_match:
             idx = int(idx_match.group(1)) - 1
             if 0 <= idx < len(frameworks):
                 return frameworks[idx].get("outline", [])
 
-        # Try matching by name
+        # Try matching by Chinese ordinal: "第一个", "第二个", "第三个"
+        cn_ordinals = {"第一个": 0, "第二个": 1, "第三个": 2}
+        for cn, i in cn_ordinals.items():
+            if cn in fb and i < len(frameworks):
+                return frameworks[i].get("outline", [])
+
+        # Try matching by English ordinal: "first", "second", "third"
+        en_ordinals = {"first": 0, "second": 1, "third": 2}
+        for en, i in en_ordinals.items():
+            if en in fb and i < len(frameworks):
+                return frameworks[i].get("outline", [])
+
+        # Try matching by letter: "option a", "option b", "a", "b"
+        letter_match = re.search(r"(?:option\s*)?([a-z])", fb)
+        if letter_match:
+            letter = letter_match.group(1)
+            idx = ord(letter) - ord("a")
+            if 0 <= idx < len(frameworks):
+                return frameworks[idx].get("outline", [])
+
+        # Try matching by name (Chinese)
         for fw in frameworks:
             name = fw.get("name", "").replace(" ", "")
             if name and name in fb:
                 return fw.get("outline", [])
 
-        # Default to first framework
-        return frameworks[0].get("outline", [])
+        # No match found — return None to signal error
+        return None
 
     def _discuss(self, feedback: str) -> str:
         """Discussion round during content/review stage."""
@@ -378,19 +424,22 @@ class Writer:
         # Load history from file
         self._load_history()
 
-        # Build conversation with history
-        messages = [
+        # Build cached system prompt with static context
+        system_context = (
+            f"核心概念：\n{concept_text}\n\n"
+            f"当前正文：\n{content}\n\n"
+            f"当前自检清单：\n{checklist}"
+        )
+        system_prompt = [
             {
-                "role": "user",
-                "content": (
-                    f"核心概念：\n{concept_text}\n\n"
-                    f"当前正文：\n{content}\n\n"
-                    f"当前自检清单：\n{checklist}"
-                ),
-            },
-            {"role": "assistant", "content": "好的，我已了解当前文章内容。请提出你的意见。"},
+                "type": "text",
+                "text": f"{DISCUSS_SYSTEM}\n\n{system_context}",
+                "cache_control": {"type": "ephemeral"},
+            }
         ]
-        messages.extend(self._history)
+
+        # Build conversation: only feedback and assistant responses
+        messages = list(self._history)
         user_msg = feedback
         if topic_context:
             user_msg += f"\n\n[系统补充的存量笔记参考：\n{topic_context}]"
@@ -414,7 +463,7 @@ class Writer:
             return "草稿已更新"
 
         response = self.llm.agentic_call(
-            system=DISCUSS_SYSTEM,
+            system=system_prompt,
             messages=messages,
             tools=[WEB_SEARCH_TOOL, UPDATE_DRAFT_TOOL],
             tool_executor={
@@ -602,3 +651,65 @@ class Writer:
             stage = self.stage or "unknown"
             logger.info("draft restored from backup, stage=%s", stage)
             return f"已恢复到上一版本（阶段：{stage}）"
+
+    def _archive_draft(self) -> None:
+        """Move draft files to .archive/ directory for post-publish undo."""
+        archive_dir = self.cfg.knowledge.publish_path / ".archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        stamp = now_iso().replace(":", "-").replace("T", "_").split("+")[0]
+        dest = archive_dir / f"draft_{stamp}"
+        dest.mkdir(parents=True, exist_ok=True)
+
+        for src in [self.draft_meta_path, self.draft_path, self.history_path]:
+            if src.exists():
+                shutil.move(str(src), str(dest / src.name))
+        # Also archive backups
+        bak_meta = self.draft_meta_path.with_suffix(".json.bak")
+        bak_md = self.draft_path.with_suffix(".md.bak")
+        for bak in [bak_meta, bak_md]:
+            if bak.exists():
+                shutil.move(str(bak), str(dest / bak.name))
+
+    def restore_published(self) -> str:
+        """Restore the most recently archived draft. Returns status message."""
+        with self._lock:
+            archive_dir = self.cfg.knowledge.publish_path / ".archive"
+            if not archive_dir.exists():
+                return "没有可恢复的已发布草稿。"
+
+            # Find the most recent archive subdirectory
+            subdirs = sorted(
+                [d for d in archive_dir.iterdir() if d.is_dir()],
+                key=lambda d: d.name,
+                reverse=True,
+            )
+            if not subdirs:
+                return "没有可恢复的已发布草稿。"
+
+            latest = subdirs[0]
+            restored = []
+            for name in ["draft.json", "draft.md", "draft.history.json"]:
+                src = latest / name
+                if name == "draft.json" and src.exists():
+                    shutil.move(str(src), str(self.draft_meta_path))
+                    restored.append(name)
+                elif name == "draft.md" and src.exists():
+                    shutil.move(str(src), str(self.draft_path))
+                    restored.append(name)
+                elif name == "draft.history.json" and src.exists():
+                    shutil.move(str(src), str(self.history_path))
+                    restored.append(name)
+
+            if not restored:
+                return "没有可恢复的已发布草稿。"
+
+            # Remove archive directory if empty
+            try:
+                latest.rmdir()
+            except OSError:
+                pass
+
+            stage = self.stage or "unknown"
+            logger.info("published draft restored, stage=%s", stage)
+            return f"已恢复已发布草稿（阶段：{stage}，恢复文件：{', '.join(restored)}）"

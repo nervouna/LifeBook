@@ -364,6 +364,18 @@ def restore_cmd(ctx: click.Context) -> None:
     click.echo(result)
 
 
+@main.command("restore-published")
+@click.pass_context
+def restore_published_cmd(ctx: click.Context) -> None:
+    """Restore the most recently published draft from archive."""
+    from .writer import Writer
+    from .llm import LLMClient
+    cfg = ctx.obj["config"]
+    w = Writer(cfg, LLMClient(cfg.llm))
+    result = w.restore_published()
+    click.echo(result)
+
+
 def _send_to_feishu(cfg, gen, audio_bytes: bytes, output: str, chat_id: str | None) -> None:
     """Convert audio to opus and send to Feishu."""
     from .feishu_transport import FeishuTransport

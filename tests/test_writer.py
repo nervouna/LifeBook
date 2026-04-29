@@ -916,14 +916,14 @@ class TestEdgeCases:
         result = w._select_framework(frameworks, "选方案B")
         assert result == [{"heading": "B1", "point": "p2"}]
 
-    def test_select_framework_defaults_to_first(self, tmp_path):
-        """_select_framework should default to first when no match."""
+    def test_select_framework_returns_none_on_no_match(self, tmp_path):
+        """_select_framework should return None when no match (caller shows options)."""
         w, llm, cfg = make_writer(tmp_path)
         frameworks = [
             {"name": "方案A", "outline": [{"heading": "A1", "point": "p1"}]},
         ]
         result = w._select_framework(frameworks, "随便写")
-        assert result == [{"heading": "A1", "point": "p1"}]
+        assert result is None
 
     def test_advance_to_content_empty_frameworks(self, tmp_path):
         """_advance_to_content should return error when frameworks is empty."""

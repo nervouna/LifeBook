@@ -75,9 +75,11 @@ class TestWriterEdgeCases:
         w.start("idea")
         llm.structured_call.return_value = FRAMEWORK_RESULT
         w.handle_message("确认")
-        llm.text_call.return_value = "Generated content\n---\n- checklist item"
         result = w.handle_message("随便写没有框架的内容")
-        assert w.stage == STAGE_CONTENT
+        # No match → error with options, stage stays at framework
+        assert w.stage == STAGE_FRAMEWORK
+        assert "未找到匹配" in result
+        assert "方案" in result
 
     def test_evaluate_backfill_no_context(self, tmp_path):
         w, llm, cfg = make_writer(tmp_path)
