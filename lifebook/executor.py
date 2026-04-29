@@ -111,8 +111,7 @@ class Executor:
             return val_err
 
         # Step 6: link + compose topic
-        extra_meta = {k: v for k, v in post.metadata.items()
-                      if k not in STANDARD_SOURCE_FIELDS}
+        extra_meta = self._extra_meta(post)
         topic_body = self._compose_topic_body(
             summary=extracted["summary"],
             key_points=extracted["key_points"],
@@ -178,8 +177,7 @@ class Executor:
         if val_err:
             return val_err
 
-        extra_meta = {k: v for k, v in post.metadata.items()
-                      if k not in STANDARD_SOURCE_FIELDS}
+        extra_meta = self._extra_meta(post)
         topic_body = self._compose_topic_body(
             summary=extracted["summary"],
             key_points=extracted["key_points"],
@@ -196,10 +194,7 @@ class Executor:
         self, img_data: ImageData, post: frontmatter.Post, source_path: Path,
     ) -> tuple[dict, ProcessResult | None]:
         """Extract structured data from an image via vision LLM."""
-        existing_categories = [
-            c for c in self.store.existing_categories()
-            if c in self._valid_categories
-        ]
+        existing_categories = self._filtered_categories()
         caption = post.content.strip() if post.content else ""
         user_prompt = self._build_image_extract_prompt(
             title_hint=post.get("title") or "",
@@ -276,14 +271,24 @@ class Executor:
         self.store.write_note(source_path, post)
         return content, None
 
-    def _extract(self, content: str, post: frontmatter.Post, source_path: Path) -> tuple[dict, ProcessResult | None]:
-        """Extract structured data via LLM. Returns (extracted, error_or_none)."""
-        extra_meta = {k: v for k, v in post.metadata.items()
-                      if k not in STANDARD_SOURCE_FIELDS}
-        existing_categories = [
+    def _filtered_categories(self) -> list[str]:
+        return [
             c for c in self.store.existing_categories()
             if c in self._valid_categories
         ]
+
+    @staticmethod
+    def _format_categories(categories: list[str]) -> str:
+        return "、".join(categories) if categories else "（暂无，请新建）"
+
+    @staticmethod
+    def _extra_meta(post: frontmatter.Post) -> dict[str, str]:
+        return {k: v for k, v in post.metadata.items() if k not in STANDARD_SOURCE_FIELDS}
+
+    def _extract(self, content: str, post: frontmatter.Post, source_path: Path) -> tuple[dict, ProcessResult | None]:
+        """Extract structured data via LLM. Returns (extracted, error_or_none)."""
+        extra_meta = self._extra_meta(post)
+        existing_categories = self._filtered_categories()
         user_prompt = self._build_extract_prompt(
             title_hint=post.get("title") or "",
             url=post.get("source") or "",
@@ -393,7 +398,7 @@ class Executor:
         existing_categories: list[str],
         extra_meta: dict[str, str] | None = None,
     ) -> str:
-        cats = "、".join(existing_categories) if existing_categories else "（暂无，请新建）"
+        cats = self._format_categories(existing_categories)
         header = []
         if title_hint:
             header.append(f"原标题：{title_hint}")
@@ -416,7 +421,7 @@ class Executor:
         caption: str,
         existing_categories: list[str],
     ) -> str:
-        cats = "、".join(existing_categories) if existing_categories else "（暂无，请新建）"
+        cats = self._format_categories(existing_categories)
         parts = [f"现有目录：{cats}"]
         if title_hint:
             parts.insert(0, f"原标题：{title_hint}")
