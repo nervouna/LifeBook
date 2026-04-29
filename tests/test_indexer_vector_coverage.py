@@ -192,6 +192,7 @@ class TestIndexer:
         idx._index = MagicMock()
         stats = idx.incremental_update()
         assert stats["upserted"] == 1
+        idx._index.upsert_batch.assert_called_once()
 
     def test_incremental_update_skips_unchanged(self, index_cfg):
         from lifebook.indexer import Indexer
@@ -216,7 +217,7 @@ class TestIndexer:
         idx._index = MagicMock()
         # Pre-populate meta with a file that no longer exists
         idx.meta_path.write_text(
-            json.dumps({"indexed": {"nonexistent.md": 12345.0}}),
+            json.dumps({"indexed": {"nonexistent.md": {"mtime": 12345.0, "content_hash": "abc"}}}),
             encoding="utf-8",
         )
         stats = idx.incremental_update()
@@ -232,7 +233,7 @@ class TestIndexer:
         )
         idx = Indexer(index_cfg)
         idx._index = MagicMock()
-        idx._index.upsert.side_effect = Exception("upsert fail")
+        idx._index.upsert_batch.side_effect = Exception("upsert fail")
         stats = idx.incremental_update()
         assert stats["errors"] >= 1
 
@@ -318,9 +319,9 @@ class TestIndexer:
     def test_save_meta(self, index_cfg):
         from lifebook.indexer import Indexer
         idx = Indexer(index_cfg)
-        idx._save_meta({"indexed": {"a.md": 1.0}})
+        idx._save_meta({"indexed": {"a.md": {"mtime": 1.0, "content_hash": "abc"}}})
         loaded = json.loads(idx.meta_path.read_text(encoding="utf-8"))
-        assert loaded["indexed"]["a.md"] == 1.0
+        assert loaded["indexed"]["a.md"]["mtime"] == 1.0
 
     def test_run_loop_stops(self, index_cfg):
         from lifebook.indexer import Indexer

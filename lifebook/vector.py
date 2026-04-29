@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ class VectorIndex:
         self.persist_dir = persist_dir
         self.model_name = model_name
         self._model = None
+        self._model_lock = threading.Lock()
 
         # Create directory if it doesn't exist
         persist_dir.mkdir(parents=True, exist_ok=True)
@@ -69,8 +71,10 @@ class VectorIndex:
     @property
     def model(self) -> SentenceTransformer:
         if self._model is None:
-            logger.info("Loading embedding model: %s", self.model_name)
-            self._model = SentenceTransformer(self.model_name)
+            with self._model_lock:
+                if self._model is None:
+                    logger.info("Loading embedding model: %s", self.model_name)
+                    self._model = SentenceTransformer(self.model_name)
         return self._model
 
     @model.setter
