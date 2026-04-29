@@ -4,6 +4,7 @@
 
 set -euo pipefail
 
+export PATH="/opt/homebrew/bin:$PATH"
 PROJECT_DIR="/Users/damao/Develop/Projects/LifeBook"
 YESTERDAY=$(date -v-1d +%Y-%m-%d)
 LOG_FILE="${PROJECT_DIR}/logs/podcast_${YESTERDAY}.log"
