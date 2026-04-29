@@ -53,6 +53,10 @@ class InboxService:
     def process_single(self, rel_path: str):
         executor = Executor(self.cfg)
         full_path = self.cfg.knowledge.root / rel_path
+        resolved = full_path.resolve()
+        if not resolved.is_relative_to(self.cfg.knowledge.root.resolve()):
+            yield {"event": "error", "data": '{"message": "Invalid path"}'}
+            return
         if not full_path.is_file():
             yield {"event": "error", "data": '{"message": "File not found"}'}
             return

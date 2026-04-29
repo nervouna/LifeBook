@@ -17,4 +17,3 @@ api_router.include_router(search_router, prefix="/search", tags=["search"])
 api_router.include_router(writer_router, prefix="/writer", tags=["writer"])
 api_router.include_router(podcast_router, prefix="/podcast", tags=["podcast"])
 api_router.include_router(system_router, prefix="/system", tags=["system"])
-api_router.include_router(system_router, tags=["system"])  # /categories, /tags
