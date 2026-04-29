@@ -28,7 +28,7 @@ class NoteService:
         for md in sorted(topics_path.rglob("*.md")):
             try:
                 post = read_note(md)
-            except Exception:
+            except (FileNotFoundError, UnicodeDecodeError, ValueError):
                 continue
             meta = post.metadata
             if category and meta.get("category") != category:
@@ -56,7 +56,7 @@ class NoteService:
             return None
         try:
             post = read_note(path)
-        except Exception:
+        except (FileNotFoundError, UnicodeDecodeError, ValueError):
             return None
         return {
             "path": rel_path,
@@ -100,6 +100,6 @@ class NoteService:
                 post = read_note(md)
                 for t in post.get("tags") or []:
                     tags.add(t)
-            except Exception:
+            except (FileNotFoundError, UnicodeDecodeError, ValueError):
                 continue
         return sorted(tags)

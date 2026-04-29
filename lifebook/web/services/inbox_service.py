@@ -21,7 +21,7 @@ class InboxService:
         for md in sorted(sources_path.glob("*.md")):
             try:
                 post = read_note(md)
-            except Exception:
+            except (FileNotFoundError, UnicodeDecodeError, ValueError):
                 continue
             s = post.get("status", "inbox")
             if status:

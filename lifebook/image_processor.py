@@ -34,7 +34,7 @@ def detect_mime_type(image_bytes: bytes) -> str:
         img = Image.open(io.BytesIO(image_bytes))
         fmt = img.format or "JPEG"
         return _MEDIA_TYPE_MAP.get(fmt, "image/jpeg")
-    except Exception:
+    except (OSError, ValueError, KeyError):
         return "image/jpeg"
 
 

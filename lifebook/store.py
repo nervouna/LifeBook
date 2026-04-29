@@ -54,7 +54,7 @@ class NoteStore:
         for p in sorted(root.glob("*.md")):
             try:
                 post = read_note(p)
-            except Exception as e:
+            except (FileNotFoundError, UnicodeDecodeError, ValueError) as e:
                 logger.warning("skip unreadable %s: %s", p, e)
                 continue
             if post.get("status") == "inbox":
@@ -93,7 +93,7 @@ class NoteStore:
         for p in sorted(root.glob("*.md")):
             try:
                 post = read_note(p)
-            except Exception as e:
+            except (FileNotFoundError, UnicodeDecodeError, ValueError) as e:
                 logger.warning("skip unreadable %s: %s", p, e)
                 continue
             if post.get("status") != "processing":
@@ -111,7 +111,7 @@ class NoteStore:
                     pa_dt = pa
                 else:
                     pa_dt = datetime.fromisoformat(str(pa))
-            except Exception:
+            except ValueError:
                 stale.append((p, f"(bad timestamp: {pa})"))
                 if not dry_run:
                     post["status"] = "inbox"
@@ -165,7 +165,7 @@ class NoteStore:
                     post = read_note(md)
                     title = post.get("title") or md.stem
                     cache.append((md, post.metadata, title, post.content))
-                except Exception:
+                except (FileNotFoundError, UnicodeDecodeError, ValueError):
                     continue
             self._topic_cache = cache
             return cache
