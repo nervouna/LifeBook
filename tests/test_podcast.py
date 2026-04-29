@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lifebook.podcast import PodcastGenerator, ScriptSegment, TTSError, select_notes
+from lifebook.podcast import PodcastGenerator, ScriptSegment, TTSError, select_notes, _extract_podcast_content
 
 
 def _mock_path(p: str, read_bytes: bytes = b"") -> MagicMock:
@@ -148,15 +148,54 @@ class TestGeneratePodcast:
         gen.llm.text_call.return_value = "早上好大毛。\n（认真）今天聊 AI。\n再见。"
         gen.tts.synthesize.return_value = b"fake_mp3"
         gen._concat_audio = MagicMock(return_value=b"merged")
+        gen._get_duration_from_bytes = MagicMock(return_value=120)
 
         audio_bytes, duration = gen.generate(note)
 
         assert audio_bytes == b"merged"
+        assert duration == 120
         assert gen.tts.synthesize.call_count == 3
 
     def test_missing_note_raises(self, gen):
         with pytest.raises(FileNotFoundError):
             gen.generate(Path("/nonexistent/note.md"))
+
+
+class TestExtractPodcastContent:
+    def test_strips_frontmatter(self):
+        raw = "> 摘要\n\n## 要点\n- point 1\n\n## 章节\nContent here."
+        result = _extract_podcast_content(raw)
+        assert "摘要" in result
+        assert "要点" in result
+        assert "章节" in result
+
+    def test_skips_related_notes(self):
+        raw = "## 要点\n- point 1\n\n## 相关笔记\n- [[note1]]\n- [[note2]]"
+        result = _extract_podcast_content(raw)
+        assert "要点" in result
+        assert "相关笔记" not in result
+        assert "note1" not in result
+
+    def test_skips_source(self):
+        raw = "## 章节\nContent.\n\n## 来源\nhttps://example.com"
+        result = _extract_podcast_content(raw)
+        assert "章节" in result
+        assert "来源" not in result
+        assert "example.com" not in result
+
+    def test_skips_both_related_and_source(self):
+        raw = "Content.\n\n## 相关笔记\n- [[a]]\n\n## 来源\nhttps://x.com"
+        result = _extract_podcast_content(raw)
+        assert result == "Content."
+
+    def test_no_skip_sections(self):
+        raw = "## 要点\n- p1\n\n## 详情\nMore content."
+        result = _extract_podcast_content(raw)
+        assert "详情" in result
+
+    def test_empty_content(self):
+        assert _extract_podcast_content("") == ""
+        assert _extract_podcast_content("   ") == ""
 
 
 class TestSelectNotes:
@@ -244,12 +283,74 @@ class TestGenerateMulti:
         gen.llm.text_call.return_value = "Hello.\nWorld."
         gen.tts.synthesize.return_value = b"fake_mp3"
         gen._concat_audio = MagicMock(return_value=b"merged")
+        gen._get_duration_from_bytes = MagicMock(return_value=60)
 
         audio, duration = gen.generate_multi([n1, n2], has_more=False)
 
         assert audio == b"merged"
+        assert duration == 60
         assert gen.tts.synthesize.call_count == 2
 
     def test_empty_notes_raises(self, gen):
         with pytest.raises(ValueError, match="No notes"):
             gen.generate_multi([], has_more=False)
+
+
+class TestGenerateMultiScriptEdgeCases:
+    def test_single_note(self, gen, tmp_path):
+        n1 = tmp_path / "single.md"
+        n1.write_text("---\ntitle: Only\n---\nContent.\n", encoding="utf-8")
+
+        gen.llm.text_call.return_value = "Hi.\nBye."
+        segments = gen.generate_multi_script([n1], has_more=False)
+
+        assert len(segments) == 2
+        gen.llm.text_call.assert_called_once()
+
+    def test_empty_content_note(self, gen, tmp_path):
+        n1 = tmp_path / "empty.md"
+        n1.write_text("---\ntitle: Empty\n---\n\n", encoding="utf-8")
+
+        gen.llm.text_call.return_value = "Hi.\nBye."
+        segments = gen.generate_multi_script([n1], has_more=False)
+
+        assert len(segments) == 2
+
+    def test_long_content_truncated(self, gen, tmp_path):
+        n1 = tmp_path / "long.md"
+        long_content = "x" * 6000
+        n1.write_text(f"---\ntitle: Long\n---\n{long_content}\n", encoding="utf-8")
+
+        gen.llm.text_call.return_value = "Hi."
+        gen.generate_multi_script([n1], has_more=False)
+
+        call_args = gen.llm.text_call.call_args
+        prompt = call_args.kwargs.get("user_prompt", call_args[1].get("user_prompt", ""))
+        assert len(prompt) < 6500  # title + truncated content
+
+    def test_file_read_error_skips(self, gen, tmp_path):
+        good = tmp_path / "good.md"
+        good.write_text("---\ntitle: Good\n---\nContent.\n", encoding="utf-8")
+        bad = tmp_path / "bad.md"
+        bad.write_bytes(b"\x80\x81\x82")  # invalid utf-8
+
+        gen.llm.text_call.return_value = "Hi."
+        segments = gen.generate_multi_script([bad, good], has_more=False)
+
+        assert len(segments) == 1
+        gen.llm.text_call.assert_called_once()
+
+    def test_all_files_bad_raises(self, gen, tmp_path):
+        bad = tmp_path / "bad.md"
+        bad.write_bytes(b"\x80\x81\x82")
+
+        with pytest.raises(ValueError, match="No readable notes"):
+            gen.generate_multi_script([bad], has_more=False)
+
+
+class TestPodcastGeneratorInit:
+    def test_llm_required(self):
+        cfg = MagicMock()
+        cfg.tts = MagicMock()
+        with pytest.raises(TypeError):
+            PodcastGenerator(cfg)

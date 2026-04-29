@@ -9,13 +9,43 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import frontmatter
-
 from .config import Config
 from .llm import LLMClient
+from .notes import read_note
 from .tts import TTSClient, TTSError
 
 logger = logging.getLogger(__name__)
+
+_PODCAST_SKIP_SECTIONS = {"## 相关笔记", "## 来源"}
+_CHARS_PER_MINUTE = 180
+
+
+def _extract_podcast_content(raw_content: str) -> str:
+    """Extract high-value sections for podcast, stop at first skip section."""
+    lines = raw_content.strip().splitlines()
+    result: list[str] = []
+    for line in lines:
+        if line.strip() in _PODCAST_SKIP_SECTIONS:
+            break
+        result.append(line)
+    return "\n".join(result).strip()
+
+
+@dataclass
+class ScriptSegment:
+    speaker: str
+    text: str
+
+
+def _parse_segments(raw: str) -> list[ScriptSegment]:
+    """Parse LLM output into script segments."""
+    segments: list[ScriptSegment] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        segments.append(ScriptSegment(speaker="host", text=line))
+    return segments
 
 
 def select_notes(
@@ -61,6 +91,8 @@ _SCRIPT_SYSTEM = (
 _SCRIPT_SYSTEM_MULTI = (
     _SCRIPT_BASE
     + "根据提供的多篇知识笔记内容，生成一段单人播客脚本。\n"
+    + "目标时长约 30 分钟（约 5000 字口播稿）。\n"
+    + "如果内容丰富，可以适当展开细节和例子；如果笔记较少，可以深入分析每篇的核心观点。\n"
     + "开头要有简短的问候和引入，例如：早上好呀大毛，（精神满满）今天咱们来聊聊最近发生的几件有意思的事。\n"
     + "内容要求：覆盖每篇笔记的核心要点，话题之间自然过渡，有引子、有展开、有总结。\n"
     + "涉及出口管制、地缘政治、军事、制裁等敏感话题时，用中性技术视角表述，聚焦产业影响和技术细节，避免情绪化用词。\n"
@@ -71,14 +103,10 @@ _SCRIPT_SYSTEM_MULTI = (
 )
 
 
-@dataclass
-class ScriptSegment:
-    speaker: str
-    text: str
-
-
 class PodcastGenerator:
-    def __init__(self, cfg: Config, llm: LLMClient | None = None, tts: TTSClient | None = None):
+    _PODCAST_MAX_TOKENS = 16384
+
+    def __init__(self, cfg: Config, llm: LLMClient, tts: TTSClient | None = None):
         self.cfg = cfg
         self.llm = llm
         self.tts = tts or TTSClient(cfg.tts)
@@ -87,13 +115,7 @@ class PodcastGenerator:
         """Generate podcast monologue script from note content."""
         prompt = f"标题：{title}\n\n{content}"
         raw = self.llm.text_call(user_prompt=prompt, system=_SCRIPT_SYSTEM)
-        segments: list[ScriptSegment] = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            segments.append(ScriptSegment(speaker="host", text=line))
-        return segments
+        return _parse_segments(raw)
 
     def generate_multi_script(
         self, notes: list[Path], has_more: bool
@@ -101,10 +123,17 @@ class PodcastGenerator:
         """Generate a combined podcast script from multiple notes."""
         parts: list[str] = []
         for p in notes:
-            post = frontmatter.loads(p.read_text(encoding="utf-8"))
-            title = post.get("title", p.stem)
-            content = post.content.strip()[:800]
-            parts.append(f"## {title}\n{content}")
+            try:
+                post = read_note(p)
+                title = post.get("title", p.stem)
+                content = _extract_podcast_content(post.content)[:5000]
+                parts.append(f"## {title}\n{content}")
+            except (FileNotFoundError, UnicodeDecodeError, ValueError) as e:
+                logger.warning("Skipping note %s: %s", p.name, e)
+                continue
+
+        if not parts:
+            raise ValueError("No readable notes found")
 
         prompt = "\n\n".join(parts)
         has_more_hint = (
@@ -114,14 +143,16 @@ class PodcastGenerator:
         )
         system = _SCRIPT_SYSTEM_MULTI.format(has_more_hint=has_more_hint)
 
-        raw = self.llm.text_call(user_prompt=prompt, system=system)
-        segments: list[ScriptSegment] = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            segments.append(ScriptSegment(speaker="host", text=line))
-        return segments
+        raw = self.llm.text_call(
+            user_prompt=prompt, system=system,
+            max_tokens=self._PODCAST_MAX_TOKENS,
+        )
+        script_chars = len(raw)
+        logger.info(
+            "Generated script: %d chars (~%.1f min)",
+            script_chars, script_chars / _CHARS_PER_MINUTE,
+        )
+        return _parse_segments(raw)
 
     def synthesize_script(self, segments: list[ScriptSegment]) -> bytes:
         """Synthesize each segment independently, skip content-filtered ones, concat."""
@@ -188,24 +219,33 @@ class PodcastGenerator:
             src_path.unlink(missing_ok=True)
             dst_path.unlink(missing_ok=True)
 
+    def _get_duration_from_bytes(self, audio_bytes: bytes) -> int:
+        """Get duration in seconds from audio bytes via ffprobe (piped)."""
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", "-i", "pipe:0"],
+            input=audio_bytes, capture_output=True, check=True,
+        )
+        return max(1, int(float(result.stdout.strip())))
+
     def generate(self, note_path: Path) -> tuple[bytes, int]:
         """Full pipeline: note → script → TTS.
 
-        Returns (audio_bytes, duration_seconds_estimate).
+        Returns (audio_bytes, duration_seconds).
         """
         if not note_path.exists():
             raise FileNotFoundError(f"Note not found: {note_path}")
 
-        post = frontmatter.loads(note_path.read_text(encoding="utf-8"))
+        post = read_note(note_path)
         title = post.get("title", note_path.stem)
-        content = post.content.strip()
+        content = _extract_podcast_content(post.content)
 
         segments = self.generate_script(title, content)
         if not segments:
             raise ValueError("LLM produced no valid script segments")
 
         audio_bytes = self.synthesize_script(segments)
-        duration = max(1, len(audio_bytes) // 16000)
+        duration = self._get_duration_from_bytes(audio_bytes)
         return audio_bytes, duration
 
     def generate_multi(
@@ -220,5 +260,5 @@ class PodcastGenerator:
             raise ValueError("LLM produced no valid script segments")
 
         audio_bytes = self.synthesize_script(segments)
-        duration = max(1, len(audio_bytes) // 16000)
+        duration = self._get_duration_from_bytes(audio_bytes)
         return audio_bytes, duration
