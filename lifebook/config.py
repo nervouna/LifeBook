@@ -106,6 +106,9 @@ class ExecutorConfig:
     fetch_timeout: int = 30
     user_agent: str = "Mozilla/5.0 LifeBook/0.1"
     classify_min_confidence: float = 0.5
+    max_retries: int = 3
+    max_workers: int = 4
+    processing_delay: float = 0.5
 
 
 @dataclass

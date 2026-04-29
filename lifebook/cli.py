@@ -193,7 +193,7 @@ def web(ctx: click.Context, host: str | None, port: int | None, do_reload: bool)
               help="Only show what would be rolled back, don't modify files.")
 @click.pass_context
 def recover(ctx: click.Context, timeout_minutes: int, dry_run: bool) -> None:
-    """Roll back files stuck in status:processing back to inbox."""
+    """Roll back files stuck in status:processing or fetch_failed back to inbox."""
     from .executor import Executor
     cfg = ctx.obj["config"]
     executor = Executor(cfg)
@@ -205,6 +205,20 @@ def recover(ctx: click.Context, timeout_minutes: int, dry_run: bool) -> None:
     click.echo(f"{verb} {len(stale)} file(s):")
     for p, info in stale:
         click.echo(f"  - {p.name}  [{info}]")
+
+
+@main.command("retry")
+@click.pass_context
+def retry_cmd(ctx: click.Context) -> None:
+    """Reset fetch_failed files back to inbox for retry."""
+    from .executor import Executor
+    cfg = ctx.obj["config"]
+    executor = Executor(cfg)
+    count = executor.retry_failed()
+    if count == 0:
+        click.echo("No fetch_failed files to retry.")
+    else:
+        click.echo(f"Reset {count} file(s) back to inbox.")
 
 
 @main.command()

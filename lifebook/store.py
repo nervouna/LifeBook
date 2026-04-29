@@ -84,7 +84,7 @@ class NoteStore:
     def recover_stale(
         self, timeout_minutes: int = 10, dry_run: bool = False,
     ) -> list[tuple[Path, str]]:
-        """Roll back files stuck in status:processing for longer than timeout."""
+        """Roll back files stuck in status:processing or fetch_failed."""
         root = self.cfg.sources_path
         if not root.exists():
             return []
@@ -96,7 +96,14 @@ class NoteStore:
             except (FileNotFoundError, UnicodeDecodeError, ValueError) as e:
                 logger.warning("skip unreadable %s: %s", p, e)
                 continue
-            if post.get("status") != "processing":
+            status = post.get("status")
+            if status == "fetch_failed":
+                stale.append((p, "fetch_failed"))
+                if not dry_run:
+                    post["status"] = "inbox"
+                    self.write_note(p, post)
+                continue
+            if status != "processing":
                 continue
             pa = post.get("processing_at")
             if not pa:

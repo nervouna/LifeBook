@@ -32,6 +32,9 @@ def mock_config(tmp_path):
     ]
     cfg.executor.classify_min_confidence = 0.5
     cfg.executor.batch_limit = 20
+    cfg.executor.max_retries = 3
+    cfg.executor.max_workers = 4
+    cfg.executor.processing_delay = 0.5
 
     cfg.llm = MagicMock()
     cfg.tavily = MagicMock()
@@ -142,6 +145,7 @@ class TestProcessFile:
             mock_config.knowledge.sources_path, "url.md",
             status="inbox",
             source="https://example.com/bad",
+            retry_count=3,
         )
         executor.fetcher.fetch.return_value = MagicMock(
             ok=False, status="fetch_failed", error="timeout",
