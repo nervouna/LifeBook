@@ -5,7 +5,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import click
 
@@ -138,23 +138,15 @@ def _print_result(r: ProcessResult) -> None:
 @click.pass_context
 def ingest(ctx: click.Context, url_or_text: str, source_type: str, title: str | None) -> None:
     """Add a URL or text snippet to the inbox (for quick manual testing)."""
-    from .ingest import ingest_url, ingest_text
+    from .ingest import ingest_url, ingest_text, SourceType
     cfg = ctx.obj["config"]
     is_url = url_or_text.startswith("http://") or url_or_text.startswith("https://")
     if is_url:
-        p = ingest_url(cfg.knowledge, url_or_text, source_type=source_type, title_hint=title)  # type: ignore[arg-type]
+        p = ingest_url(cfg.knowledge, url_or_text, source_type=cast(SourceType, source_type), title_hint=title)
     else:
-        p = ingest_text(cfg.knowledge, url_or_text, source_type=source_type, title_hint=title)  # type: ignore[arg-type]
+        p = ingest_text(cfg.knowledge, url_or_text, source_type=cast(SourceType, source_type), title_hint=title)
     click.echo(f"Ingested: {p}")
 
-
-@main.command()
-@click.pass_context
-def digest(ctx: click.Context) -> None:
-    """Generate and push today's digest to Feishu."""
-    click.echo("[LifeBook] digest 命令尚未实现。")
-    click.echo("提示：可以通过 Feishu Bot 发送 /process 来处理 inbox 中的文件。")
-    sys.exit(1)
 
 
 @main.command()
@@ -312,7 +304,7 @@ def doctor(ctx: click.Context) -> None:
         checks.append((name, path.exists(), str(path)))
 
     checks.append(("LLM API key", bool(cfg.llm.api_key), _mask(cfg.llm.api_key)))
-    checks.append(("LLM model", True, f"{cfg.llm.model} (digest: {cfg.llm.digest_model})"))
+    checks.append(("LLM model", True, cfg.llm.model))
     checks.append(("Tavily API key", bool(cfg.tavily.api_key), _mask(cfg.tavily.api_key)))
     checks.append(("Feishu app_id", bool(cfg.feishu.app_id), cfg.feishu.app_id or "(empty)"))
     checks.append(("Feishu digest chat_id", bool(cfg.feishu.digest_chat_id),

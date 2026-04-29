@@ -36,7 +36,6 @@ def mock_cfg(tmp_path):
     cfg.llm.api_key = "test-key"
     cfg.llm.base_url = "https://api.test.com"
     cfg.llm.model = "test-model"
-    cfg.llm.digest_model = "test-model"
     cfg.tavily.api_key = "test-tavily-key"
     cfg.tavily.extract_depth = "advanced"
     cfg.feishu.app_id = "test-app-id"

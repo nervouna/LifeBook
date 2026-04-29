@@ -121,7 +121,7 @@ class LLMClient:
         last_error: str | None = None
         for attempt in range(max_retries + 1):
             if images:
-                content: Any = [
+                content: str | list[dict[str, Any]] = [
                     {
                         "type": "image",
                         "source": {
