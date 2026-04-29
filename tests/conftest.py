@@ -16,6 +16,8 @@ from lifebook.config import (
 for mod in (
     "chromadb",
     "chromadb.config",
+    "chromadb.utils",
+    "chromadb.utils.embedding_functions",
     "sentence_transformers",
 ):
     if mod not in sys.modules:

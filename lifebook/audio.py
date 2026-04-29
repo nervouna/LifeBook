@@ -57,4 +57,7 @@ class AudioProcessor:
              "-of", "csv=p=0", "-i", "pipe:0"],
             input=audio_bytes, capture_output=True, check=True,
         )
-        return max(1, int(float(result.stdout.strip())))
+        raw = result.stdout.decode("utf-8", errors="replace").strip()
+        if not raw or raw == "N/A":
+            return max(1, len(audio_bytes) // 16000)
+        return max(1, int(float(raw)))

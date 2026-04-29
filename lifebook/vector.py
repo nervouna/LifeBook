@@ -9,6 +9,7 @@ from typing import Any
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
@@ -81,21 +82,9 @@ class VectorIndex:
     def model(self, value):
         self._model = value
 
-    def _embedding_function(self):
+    def _embedding_function(self) -> SentenceTransformerEmbeddingFunction:
         """Create a ChromaDB-compatible embedding function."""
-        def embed(texts: list[str]) -> list[list[float]]:
-            """Embed a list of texts."""
-            if not texts:
-                return []
-            embeddings = self.model.encode(
-                texts,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
-            # Convert to list of lists for ChromaDB
-            return [emb.tolist() for emb in embeddings]
-        
-        return embed
+        return SentenceTransformerEmbeddingFunction(model_name=self.model_name)
     
     def upsert(self, doc_id: str, text: str, metadata: dict[str, str | int | float]) -> None:
         """Add or update a single document.
