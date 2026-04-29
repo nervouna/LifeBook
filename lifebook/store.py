@@ -4,6 +4,7 @@ from __future__ import annotations
 import fcntl
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,9 @@ from .notes import (
 )
 
 logger = logging.getLogger(__name__)
+
+CACHE_TTL_SECONDS = 30
+_CACHE_CONTENT_LIMIT = 500
 
 
 @dataclass
@@ -41,6 +45,7 @@ class NoteStore:
     def __init__(self, cfg: KnowledgeConfig):
         self.cfg = cfg
         self._topic_cache: list[tuple[Path, dict, str, str]] | None = None
+        self._cache_time: float | None = None
         self._cache_lock = threading.Lock()
 
     # ---------- source (inbox) operations ----------
@@ -149,14 +154,24 @@ class NoteStore:
         return None
 
     def _load_topic_cache(self) -> list[tuple[Path, dict, str, str]]:
-        """Load and cache topic notes metadata and content."""
+        """Load and cache topic notes metadata and content.
+
+        Cache is reused if younger than CACHE_TTL_SECONDS.
+        Content is truncated to _CACHE_CONTENT_LIMIT chars to bound memory.
+        """
         with self._cache_lock:
-            if self._topic_cache is not None:
+            now = time.time()
+            if (
+                self._topic_cache is not None
+                and self._cache_time is not None
+                and (now - self._cache_time) < CACHE_TTL_SECONDS
+            ):
                 return self._topic_cache
 
             root = self.cfg.topics_path
             if not root.exists():
                 self._topic_cache = []
+                self._cache_time = now
                 return self._topic_cache
 
             cache = []
@@ -164,16 +179,22 @@ class NoteStore:
                 try:
                     post = read_note(md)
                     title = post.get("title") or md.stem
-                    cache.append((md, post.metadata, title, post.content))
+                    content = post.content[:_CACHE_CONTENT_LIMIT]
+                    cache.append((md, post.metadata, title, content))
                 except (FileNotFoundError, UnicodeDecodeError, ValueError):
                     continue
             self._topic_cache = cache
+            self._cache_time = now
             return cache
 
-    def _invalidate_topic_cache(self) -> None:
-        """Invalidate the topic cache (e.g., after a write)."""
+    def _invalidate_topic_cache(self, force: bool = False) -> None:
+        """Invalidate the topic cache (e.g., after a write).
+
+        When force=True, always clears. Otherwise only clears if present.
+        """
         with self._cache_lock:
             self._topic_cache = None
+            self._cache_time = None
 
     def find_related(self, keywords: list[str], max_hits: int = 5) -> list[str]:
         """Scan topics/*/*.md; return titles whose title/tags/keywords match."""
@@ -248,7 +269,7 @@ class NoteStore:
 
             # Layer 2: keyword match on title + content
             title_lower = title.lower()
-            content_lower = content[:500].lower()
+            content_lower = content.lower()
             keyword_score = 0.0
             for w in words:
                 if w in title_lower:

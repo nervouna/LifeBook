@@ -7,11 +7,13 @@ import frontmatter
 
 from lifebook.config import KnowledgeConfig
 from lifebook.notes import read_note, write_note
+from lifebook.store import NoteStore
 
 
 class NoteService:
-    def __init__(self, cfg: KnowledgeConfig):
+    def __init__(self, cfg: KnowledgeConfig, store: NoteStore | None = None):
         self.cfg = cfg
+        self._store = store or NoteStore(cfg)
 
     def list_notes(
         self,
@@ -21,28 +23,19 @@ class NoteService:
         per_page: int = 20,
     ) -> dict:
         notes = []
-        topics_path = self.cfg.topics_path
-        if not topics_path.exists():
-            return {"items": [], "total": 0, "page": page, "per_page": per_page}
-
-        for md in sorted(topics_path.rglob("*.md")):
-            try:
-                post = read_note(md)
-            except (FileNotFoundError, UnicodeDecodeError, ValueError):
-                continue
-            meta = post.metadata
+        for md, meta, title, content in self._store._load_topic_cache():
             if category and meta.get("category") != category:
                 continue
             if tag and tag not in (meta.get("tags") or []):
                 continue
             notes.append({
                 "path": str(md.relative_to(self.cfg.root)),
-                "title": meta.get("title") or md.stem,
+                "title": title,
                 "category": meta.get("category", ""),
                 "tags": meta.get("tags") or [],
                 "created": meta.get("created", ""),
                 "status": meta.get("status", "active"),
-                "summary": post.content[:200].strip(),
+                "summary": content[:200].strip(),
             })
 
         total = len(notes)
@@ -85,21 +78,11 @@ class NoteService:
         return self.get_note(rel_path)
 
     def get_categories(self) -> list[str]:
-        topics_path = self.cfg.topics_path
-        if not topics_path.exists():
-            return []
-        return sorted(d.name for d in topics_path.iterdir() if d.is_dir() and not d.name.startswith("."))
+        return self._store.existing_categories()
 
     def get_tags(self) -> list[str]:
         tags: set[str] = set()
-        topics_path = self.cfg.topics_path
-        if not topics_path.exists():
-            return []
-        for md in topics_path.rglob("*.md"):
-            try:
-                post = read_note(md)
-                for t in post.get("tags") or []:
-                    tags.add(t)
-            except (FileNotFoundError, UnicodeDecodeError, ValueError):
-                continue
+        for _md, meta, _title, _content in self._store._load_topic_cache():
+            for t in meta.get("tags") or []:
+                tags.add(t)
         return sorted(tags)
