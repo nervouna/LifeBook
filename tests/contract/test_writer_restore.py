@@ -50,7 +50,8 @@ def test_restore_published_from_archive(cfg, make_writer):
     assert writer.active is False
 
     # _archive_draft 用的目录约定：{publish_path}/.archive/draft_<stamp>/
-    # restore_published 会按 name 倒序排序自动选最新一条。
+    # restore_published 按 name 倒序选最新；测试隔离在 tmp_path 下，
+    # 此处时间戳是该测试唯一的归档条目，必然被选中。
     archive_dir = cfg.knowledge.publish_path / ".archive" / "draft_2026-01-01_12-00-00"
     archive_dir.mkdir(parents=True)
 
@@ -65,9 +66,10 @@ def test_restore_published_from_archive(cfg, make_writer):
     assert isinstance(out, str) and out.strip()
     assert "恢复" in out, f"expected restore success message, got: {out!r}"
 
-    # 核心契约：draft.md / draft.json 已经回到正常位置。
+    # 核心契约：draft.md / draft.json 已经回到正常位置，内容字节级一致。
     assert writer.draft_path.exists(), "draft.md should be restored"
     assert writer.draft_meta_path.exists(), "draft.json should be restored"
+    assert writer.draft_path.read_text(encoding="utf-8") == "# 恢复内容\n\n正文。\n"
 
     meta = json.loads(writer.draft_meta_path.read_text(encoding="utf-8"))
     assert meta.get("title") == "恢复内容"
