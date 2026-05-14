@@ -542,7 +542,7 @@ def test_fetch_failure_increments_retry_then_fails_then_retried(cfg, make_execut
     source_path = ingest_url(cfg.knowledge, url)
 
     # All fetches fail
-    fake_fetcher.script(url, fake_fetch_result(url=url, ok=False, error="boom", status="ERR"))
+    fake_fetcher.script(url, fake_fetch_result(url=url, ok=False, error="boom"))
 
     executor = make_executor()
 
