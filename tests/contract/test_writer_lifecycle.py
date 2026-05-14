@@ -46,6 +46,8 @@ def test_writer_start_creates_draft_then_publish_writes_file(cfg, make_writer, f
     writer.draft_meta_path.write_text(
         json.dumps(meta, ensure_ascii=False), encoding="utf-8"
     )
+    # checkpoint：确认 stage 写入已被 Writer 读到，避免 publish 失败时混淆 setup 与 _publish。
+    assert writer.stage == "review", f"pre-publish stage setup failed: {writer.stage!r}"
 
     # publish() 返回的是状态消息（str），不是 Path。
     # 知识库为空，_evaluate_backfill 中 _vector_search 走 NoteStore.search_topics_formatted，
