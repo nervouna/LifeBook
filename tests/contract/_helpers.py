@@ -140,7 +140,10 @@ class FakeFetcher:
         self.calls.append(url)
         if url in self.plan:
             return self.plan[url]
-        return FetchResult(ok=False, status="UNSCRIPTED", error=f"no scripted response for {url}")
+        raise AssertionError(
+            f"FakeFetcher: no scripted response for {url!r}. "
+            f"Use fetcher.script(url, FetchResult(...)) before invoking."
+        )
 
 
 # --------- Sample LLM payload helpers ---------
