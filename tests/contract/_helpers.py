@@ -28,6 +28,10 @@ class FakeLLMClient:
         llm = FakeLLMClient()
         llm.queue_structured("extract_note", {...})
         llm.queue_text("hello")
+
+    Stage-1 tests only exercise structured_call. The text_call / agentic_call
+    queues + call-log fields are kept for future-stage tests that may exercise
+    Writer's multi-turn paths (handle_message → text_call) or agentic flows.
     """
 
     structured_queue: deque[_StructuredResponse] = field(default_factory=deque)
