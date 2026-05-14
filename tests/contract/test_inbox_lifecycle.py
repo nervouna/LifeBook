@@ -57,4 +57,4 @@ def test_url_ingest_then_process_writes_topic(cfg, make_executor, fake_fetcher, 
     assert "llm" in tags
     assert topic_post.get("source_url") == url
     # body should contain the extracted summary
-    assert "这是摘要" in topic_post.content or "摘要" in topic_post.content
+    assert "这是摘要" in topic_post.content
