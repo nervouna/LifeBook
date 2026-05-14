@@ -484,7 +484,7 @@ def test_stale_processing_is_recovered_then_processed(cfg, make_executor, fake_f
 
     post = frontmatter.load(path)
     assert post.get("status") == "inbox"
-    assert post.get("processing_at") is None or "processing_at" not in post.metadata
+    assert "processing_at" not in post.metadata
 
     # Now wire fakes and process successfully
     fake_fetcher.script("https://example.com/stuck", fake_fetch_result(
