@@ -30,7 +30,8 @@ def test_processed_topic_is_searchable_by_keyword(cfg, make_executor, fake_fetch
 
     executor = make_executor()
     results = executor.process_inbox()
-    assert results[0].ok
+    assert len(results) == 1, f"expected 1 result, got {len(results)}"
+    assert results[0].ok, f"expected success, got error={results[0].error!r}"
 
     store = NoteStore(cfg.knowledge)
     hits = store.search_topics("transformer 架构", max_notes=3)
