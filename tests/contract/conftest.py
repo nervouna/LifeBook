@@ -19,7 +19,13 @@ from ._helpers import FakeFetcher, FakeLLMClient
 
 
 def _make_config(tmp_path: Path) -> Config:
-    """Real Config rooted at tmp_path."""
+    """Real Config rooted at tmp_path.
+
+    Duplicated body from tests/conftest.py::make_config intentionally —
+    cross-conftest imports are fragile (depends on tests/__init__.py and
+    sys.path). Keep them in sync if knowledge dirs change. The local
+    fixture `cfg` further tweaks executor settings on top of this.
+    """
     kb = tmp_path / "kb"
     kb.mkdir()
     (kb / "10-sources").mkdir()
@@ -64,7 +70,12 @@ def fake_fetcher():
 
 @pytest.fixture
 def make_executor(cfg, fake_llm, fake_fetcher):
-    """Build an Executor wired with fakes."""
+    """Build an Executor wired with the test's fake LLM and fake fetcher.
+
+    The closure captures the same `fake_llm` / `fake_fetcher` instances
+    pytest injected as fixtures. A test that requests both `make_executor`
+    and `fake_llm` shares one LLM. Script the fakes BEFORE calling _build().
+    """
     def _build():
         return Executor(cfg=cfg, llm=fake_llm, fetcher=fake_fetcher)
     return _build
@@ -72,7 +83,10 @@ def make_executor(cfg, fake_llm, fake_fetcher):
 
 @pytest.fixture
 def make_writer(cfg, fake_llm):
-    """Build a Writer wired with the fake LLM."""
+    """Build a Writer wired with the test's fake LLM.
+
+    Same shared-instance contract as make_executor.
+    """
     def _build():
         return Writer(cfg=cfg, llm=fake_llm)
     return _build

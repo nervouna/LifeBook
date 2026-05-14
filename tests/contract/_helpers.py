@@ -170,3 +170,32 @@ def extract_payload(
         "related_keywords": related_keywords or ["人工智能"],
         "confidence": confidence,
     }
+
+
+def fake_fetch_result(
+    url: str,
+    *,
+    ok: bool = True,
+    content: str = "",
+    title: str | None = None,
+    via: str = "fake",
+    error: str | None = None,
+    status: str | None = None,
+) -> FetchResult:
+    """Convenience factory that fills in FetchResult's required fields.
+
+    `lifebook.fetcher.FetchResult` requires `status` and `url` positionally;
+    callers usually want a sensible default (`"ok"` for success / `"fetch_failed"`
+    for failure) so this factory provides them.
+    """
+    if status is None:
+        status = "ok" if ok else "fetch_failed"
+    return FetchResult(
+        ok=ok,
+        status=status,
+        url=url,
+        content=content,
+        title=title,
+        via=via,
+        error=error,
+    )

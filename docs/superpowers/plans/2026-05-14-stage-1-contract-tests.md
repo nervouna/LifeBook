@@ -192,7 +192,10 @@ class FakeFetcher:
         self.calls.append(url)
         if url in self.plan:
             return self.plan[url]
-        return FetchResult(ok=False, status="UNSCRIPTED", error=f"no scripted response for {url}")
+        raise AssertionError(
+            f"FakeFetcher: no scripted response for {url!r}. "
+            f"Use fetcher.script(url, FetchResult(...)) before invoking."
+        )
 
 
 # --------- Sample LLM payload helpers ---------
@@ -339,10 +342,9 @@ from __future__ import annotations
 
 import frontmatter
 
-from lifebook.fetcher import FetchResult
 from lifebook.ingest import ingest_url
 
-from ._helpers import extract_payload
+from ._helpers import extract_payload, fake_fetch_result
 
 
 def test_url_ingest_then_process_writes_topic(cfg, make_executor, fake_fetcher, fake_llm):
@@ -355,11 +357,10 @@ def test_url_ingest_then_process_writes_topic(cfg, make_executor, fake_fetcher, 
     assert src_post.get("source") == url
 
     # 2) script the fetcher and the LLM
-    fake_fetcher.script(url, FetchResult(
-        ok=True,
+    fake_fetcher.script(url, fake_fetch_result(
+        url=url,
         content="一段被抓取下来的正文，谈论人工智能的进展。",
         title="示例文章",
-        via="fake",
     ))
     fake_llm.queue_structured("extract_note", extract_payload(
         title="示例文章",
@@ -428,10 +429,9 @@ from datetime import datetime, timedelta
 
 import frontmatter
 
-from lifebook.fetcher import FetchResult
 from lifebook.notes import CN_TZ, write_note, new_post
 
-from ._helpers import extract_payload
+from ._helpers import extract_payload, fake_fetch_result
 
 
 def test_stale_processing_is_recovered_then_processed(cfg, make_executor, fake_fetcher, fake_llm):
@@ -458,8 +458,10 @@ def test_stale_processing_is_recovered_then_processed(cfg, make_executor, fake_f
     assert post.get("processing_at") is None or "processing_at" not in post.metadata
 
     # Now wire fakes and process successfully
-    fake_fetcher.script("https://example.com/stuck", FetchResult(
-        ok=True, content="recovered content body", title="Recovered", via="fake",
+    fake_fetcher.script("https://example.com/stuck", fake_fetch_result(
+        url="https://example.com/stuck",
+        content="recovered content body",
+        title="Recovered",
     ))
     fake_llm.queue_structured("extract_note", extract_payload(title="Recovered"))
 
@@ -501,8 +503,9 @@ from __future__ import annotations
 
 import frontmatter
 
-from lifebook.fetcher import FetchResult
 from lifebook.ingest import ingest_url
+
+from ._helpers import fake_fetch_result
 
 
 def test_fetch_failure_increments_retry_then_fails_then_retried(cfg, make_executor, fake_fetcher):
@@ -510,7 +513,7 @@ def test_fetch_failure_increments_retry_then_fails_then_retried(cfg, make_execut
     source_path = ingest_url(cfg.knowledge, url)
 
     # All fetches fail
-    fake_fetcher.script(url, FetchResult(ok=False, status="ERR", error="boom"))
+    fake_fetcher.script(url, fake_fetch_result(url=url, ok=False, error="boom", status="ERR"))
 
     executor = make_executor()
 
@@ -570,22 +573,20 @@ git commit -m "test: contract — fetch retry ladder and retry_failed reset"
 """
 from __future__ import annotations
 
-from lifebook.fetcher import FetchResult
 from lifebook.ingest import ingest_url
 from lifebook.store import NoteStore
 
-from ._helpers import extract_payload
+from ._helpers import extract_payload, fake_fetch_result
 
 
 def test_processed_topic_is_searchable_by_keyword(cfg, make_executor, fake_fetcher, fake_llm):
     url = "https://example.com/transformer"
     ingest_url(cfg.knowledge, url, title_hint="Transformer 架构")
 
-    fake_fetcher.script(url, FetchResult(
-        ok=True,
+    fake_fetcher.script(url, fake_fetch_result(
+        url=url,
         content="深入讲解 Transformer 架构。",
         title="Transformer 架构",
-        via="fake",
     ))
     fake_llm.queue_structured("extract_note", extract_payload(
         title="Transformer 架构",
