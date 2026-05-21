@@ -116,8 +116,8 @@ lifebook/
 | GET | `/api/system/doctor` | Health check |
 | POST | `/api/system/index` | Rebuild vector index |
 | GET | `/api/system/stats` | Note count, inbox count, index status |
-| GET | `/api/categories` | Category list |
-| GET | `/api/tags` | Tag list |
+| GET | `/api/system/categories` | Category list |
+| GET | `/api/system/tags` | Tag list |
 
 ### SSE Protocol
 
@@ -214,7 +214,7 @@ Frontend → POST /api/writer/chat {message: "..."}
 
 ## Build & Deployment
 
-- Frontend: Vite + React + Tailwind, `npm run build` outputs to `lifebook/web/static/`
+- Frontend: Vite + React + Tailwind, `corepack pnpm run build` outputs to `lifebook/web/static/`
 - Backend: FastAPI serves `/api/*` routes + mounts `static/` for SPA
 - Start: `lifebook web` CLI command (new), runs uvicorn on configurable port (default 8080)
 - Config: add `web` section to config.yaml (port, host)

@@ -59,6 +59,15 @@ logging:
   level: INFO
   retention_days: 30
 
+web:
+  host: 127.0.0.1
+  port: 8080
+  debug: false
+  cors_origins:
+    - http://localhost:5173
+    - http://127.0.0.1:8080
+  api_key: ""
+
 image:
   max_long_edge: 1568
   max_bytes: 1048576

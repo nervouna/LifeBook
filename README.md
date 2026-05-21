@@ -29,25 +29,29 @@
 ## 快速开始
 
 ```bash
-# 1. 安装
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+# 1. 安装固定的 Python 版本并同步运行时依赖
+mise install
+uv sync
+# 如果要使用语义搜索/向量索引，再执行：uv sync --extra index
+
+# 开发/测试额外依赖（仅在需要运行 pytest 时）
+uv sync --group dev
 
 # 2. 初始化（创建目录结构和配置文件）
-lifebook init
+uv run lifebook init
 
 # 3. 配置 API Key
-#    编辑 lifebook doctor 显示的配置文件，填入：
+#    编辑 uv run lifebook doctor 显示的配置文件，填入：
 #    - llm.api_key：LLM API Key（必需）
 #    - tavily.api_key：网页抓取 API Key（可选，不填则用 httpx 直接抓取）
 
 # 4. 检查配置是否正确
-lifebook doctor
+uv run lifebook doctor
 
 # 5. 开始使用
-lifebook ingest "https://example.com/article"
-lifebook process
-lifebook search "你想找的内容"
+uv run lifebook ingest "https://example.com/article"
+uv run lifebook process
+uv run lifebook search "你想找的内容"
 ```
 
 ## 常用命令
@@ -55,52 +59,52 @@ lifebook search "你想找的内容"
 ### 录入与处理
 
 ```bash
-lifebook ingest "https://example.com/article"   # 录入 URL
-lifebook ingest "一段文字内容"                    # 录入文字
-lifebook ingest image.png                        # 录入图片
-lifebook process                                 # 处理收件箱中所有待处理文件
-lifebook process --watch                         # 监听模式，自动处理新文件
-lifebook process --file path/to/file.md          # 处理单个文件
-lifebook recover                                 # 恢复卡在处理中的文件
-lifebook retry                                   # 重试之前抓取失败的文件
+uv run lifebook ingest "https://example.com/article"   # 录入 URL
+uv run lifebook ingest "一段文字内容"                    # 录入文字
+uv run lifebook ingest image.png                        # 录入图片
+uv run lifebook process                                 # 处理收件箱中所有待处理文件
+uv run lifebook process --watch                         # 监听模式，自动处理新文件
+uv run lifebook process --file path/to/file.md          # 处理单个文件
+uv run lifebook recover                                 # 恢复卡在处理中的文件
+uv run lifebook retry                                   # 重试之前抓取失败的文件
 ```
 
 ### 搜索与浏览
 
 ```bash
-lifebook search "机器学习的最新进展"              # 语义搜索
-lifebook web                                     # 启动 Web 界面（http://127.0.0.1:8080）
-lifebook web --port 3000                         # 自定义端口
+uv run lifebook search "机器学习的最新进展"              # 语义搜索
+uv run lifebook web                                     # 启动 Web 界面（http://127.0.0.1:8080）
+uv run lifebook web --port 3000                         # 自定义端口
 ```
 
 ### 索引
 
 ```bash
-lifebook index                                   # 增量更新向量索引
-lifebook index --full                            # 全量重建索引
+uv run lifebook index                                   # 增量更新向量索引
+uv run lifebook index --full                            # 全量重建索引
 ```
 
 ### 写作
 
 ```bash
-lifebook writer-status                           # 查看当前写作状态
-lifebook publish                                 # 发布当前草稿为笔记
-lifebook restore                                 # 从备份恢复草稿
-lifebook restore-published                       # 恢复最近一次发布的草稿
+uv run lifebook writer-status                           # 查看当前写作状态
+uv run lifebook publish                                 # 发布当前草稿为笔记
+uv run lifebook restore                                 # 从备份恢复草稿
+uv run lifebook restore-published                       # 恢复最近一次发布的草稿
 ```
 
 ### 播客
 
 ```bash
-lifebook podcast path/to/note.md                 # 从单篇笔记生成播客
-lifebook podcast path/to/note.md --send          # 生成并发送到飞书
-lifebook podcast-multi --since 2026-04-22 --limit 10 --send  # 合集：最近 10 篇
+uv run lifebook podcast path/to/note.md                 # 从单篇笔记生成播客
+uv run lifebook podcast path/to/note.md --send          # 生成并发送到飞书
+uv run lifebook podcast-multi --since 2026-04-22 --limit 10 --send  # 合集：最近 10 篇
 ```
 
 ### 飞书 Bot
 
 ```bash
-lifebook serve                                   # 启动飞书 Bot（长驻进程）
+uv run lifebook serve                                   # 启动飞书 Bot（长驻进程）
 ```
 
 飞书 Bot 支持的命令：
@@ -113,7 +117,7 @@ lifebook serve                                   # 启动飞书 Bot（长驻进�
 
 ## 配置
 
-运行 `lifebook init` 后会生成配置文件（路径由 `lifebook doctor` 显示）。
+运行 `uv run lifebook init` 后会生成配置文件（路径由 `uv run lifebook doctor` 显示）。
 
 ```yaml
 # 必填
@@ -159,13 +163,14 @@ tts:                             # 语音合成（播客功能需要）
 
 ```bash
 # 启动后端（API + 静态文件）
-lifebook web
+uv run lifebook web
 
 # 前端开发（热更新）
-cd frontend && npm install && npm run dev   # http://localhost:5173
+cd frontend && mise exec -- corepack pnpm install && mise exec -- corepack pnpm run dev   # http://localhost:5173
 ```
 
 前端构建产物输出到 `lifebook/web/static/`，由 FastAPI 自动托管。
+前端 Node.js 版本由 `frontend/mise.toml` 固定，运行脚本时建议使用 `mise exec -- corepack pnpm ...`。
 
 ## 技术栈
 
@@ -178,6 +183,6 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 
 ## 环境要求
 
-- Python ≥ 3.10
+- Python ≥ 3.10（项目默认开发版本由 `mise.toml` 固定为 3.12.13）
 - macOS / Linux（文件锁使用 `fcntl`，不支持 Windows）
 - ffmpeg / ffprobe（播客音频处理需要）
