@@ -19,9 +19,4 @@ export default defineConfig({
     outDir: "../lifebook/web/static",
     emptyOutDir: true,
   },
-  test: {
-    environment: "jsdom",
-    setupFiles: ["./src/test-setup.ts"],
-    globals: true,
-  },
 });

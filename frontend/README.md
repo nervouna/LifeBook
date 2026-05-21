@@ -1,8 +1,27 @@
-# React + TypeScript + Vite
+# LifeBook Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Tooling
 
-Currently, two official plugins are available:
+- Node.js is pinned via `mise.toml` to `24.15.0`.
+- Use Corepack-managed pnpm for installs and scripts, for example:
+
+```bash
+mise exec -- corepack pnpm install
+mise exec -- corepack pnpm run build
+mise exec -- corepack pnpm run lint
+mise exec -- corepack pnpm test
+```
+
+The development server proxies `/api` to the local LifeBook backend at `http://127.0.0.1:8080`.
+Production builds write static assets to `../lifebook/web/static`, where FastAPI serves the SPA.
+
+## API Contract
+
+- Notes, inbox, search, writer, podcast, and system endpoints live under `/api`.
+- Category and tag lists are exposed as `/api/system/categories` and `/api/system/tags`.
+- Long-running inbox and podcast actions use POST endpoints that return server-sent events.
+
+## React/Vite Notes
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
 - [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
