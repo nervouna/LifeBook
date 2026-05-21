@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { NoteListResponse } from "@/lib/api";
+import type { NoteListResponse, PodcastGenerateResult } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function PodcastPage() {
   const [selectedNote, setSelectedNote] = useState<string>("");
-  const [result, setResult] = useState<{ path: string } | null>(null);
+  const [result, setResult] = useState<PodcastGenerateResult | null>(null);
 
   const notes = useQuery<NoteListResponse>({
     queryKey: ["notes", "podcast"],
@@ -41,7 +41,10 @@ export default function PodcastPage() {
             {generateMutation.isPending ? "生成中..." : "生成播客"}
           </Button>
           {result && (
-            <div className="text-sm text-muted-foreground">已生成: {result.path}</div>
+            <div className="text-sm text-muted-foreground">
+              已生成: {result.path}
+              {result.duration ? ` (${result.duration}s)` : ""}
+            </div>
           )}
         </CardContent>
       </Card>

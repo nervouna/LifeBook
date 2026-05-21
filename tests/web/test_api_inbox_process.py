@@ -28,3 +28,22 @@ class TestProcessSingle:
 
         with client.stream("POST", "/api/inbox/10-sources/test.md/process") as resp:
             assert resp.status_code == 200
+
+
+class TestProcessAll:
+    @patch("lifebook.web.services.inbox_service.Executor")
+    def test_process_all(self, mock_exec_cls, client):
+        mock_exec = MagicMock()
+        ok = MagicMock(ok=True, skipped_reason=None)
+        skipped = MagicMock(ok=False, skipped_reason="duplicate")
+        failed = MagicMock(ok=False, skipped_reason=None)
+        mock_exec.process_inbox.return_value = [ok, skipped, failed]
+        mock_exec_cls.return_value = mock_exec
+
+        with client.stream("POST", "/api/inbox/process-all") as resp:
+            assert resp.status_code == 200
+            body = resp.read().decode("utf-8")
+            assert '"total": 3' in body
+            assert '"ok": 1' in body
+            assert '"skipped": 1' in body
+            assert '"failed": 1' in body

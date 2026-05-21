@@ -74,3 +74,25 @@ class InboxService:
             yield {"event": "done", "data": json.dumps({"skipped": result.skipped_reason})}
         else:
             yield {"event": "error", "data": json.dumps({"message": result.error or "unknown error"})}
+
+    def process_all(self):
+        executor = Executor(self.cfg)
+        yield {"event": "progress", "data": '{"step": "start", "message": "开始处理收件箱..."}'}
+        try:
+            results = executor.process_inbox()
+        except Exception as e:
+            yield {"event": "error", "data": json.dumps({"message": str(e)})}
+            return
+
+        ok = sum(1 for r in results if r.ok)
+        skipped = sum(1 for r in results if r.skipped_reason)
+        failed = sum(1 for r in results if not r.ok and not r.skipped_reason)
+        yield {
+            "event": "done",
+            "data": json.dumps({
+                "total": len(results),
+                "ok": ok,
+                "skipped": skipped,
+                "failed": failed,
+            }),
+        }
